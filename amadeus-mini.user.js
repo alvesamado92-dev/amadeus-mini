@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.3.2
+// @version      0.3.3
 // @description  Lightweight cross-platform Amadeus avatar
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -28,11 +28,22 @@
   const collapse = document.createElement('button'); collapse.textContent='−';
   collapse.title='Minimize';
   collapse.style.cssText=btn.style.cssText;
-  panel.append(portrait,label,btn,collapse); document.body.append(panel);
+  const debug = document.createElement('button'); debug.textContent='?'; debug.title='Message detection diagnostics'; debug.style.cssText=btn.style.cssText;
+  panel.append(portrait,label,btn,collapse,debug); document.body.append(panel);
+  const diagnostic = document.createElement('div');
+  diagnostic.style.cssText='display:none;font-size:10px;overflow-wrap:anywhere;text-align:left;margin-top:6px;max-height:100px;overflow:auto';
+  panel.append(diagnostic);
+  debug.addEventListener('click',()=>{
+    const messages=readMessages();
+    const users=messages.filter(m=>m.role==='user');
+    const last=users.at(-1)?.content||'';
+    diagnostic.textContent='User messages: '+users.length+' | Last: '+(last.slice(0,100)||'[none]')+' | Christina detected: '+(/christina/.test(last)?'YES':'NO');
+    diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';
+  });
   let mood=-1, minimized=false, active=true, drag=null;
   function setMood(i){ if(i===mood)return; mood=i; portrait.textContent=symbols[i]; panel.dataset.mood=names[i]; }
   btn.addEventListener('click',()=>setMood((mood+1)%names.length));
-  collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=label.hidden=btn.hidden=minimized;collapse.textContent=minimized?'+':'−';});
+  collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=label.hidden=btn.hidden=debug.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';});
   panel.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;const r=panel.getBoundingClientRect();drag={x:e.clientX,y:e.clientY,left:r.left,top:r.top};panel.setPointerCapture(e.pointerId);});
   panel.addEventListener('pointermove',e=>{if(!drag)return;panel.style.left=Math.max(0,Math.min(innerWidth-panel.offsetWidth,drag.left+e.clientX-drag.x))+'px';panel.style.top=Math.max(0,Math.min(innerHeight-panel.offsetHeight,drag.top+e.clientY-drag.y))+'px';panel.style.right='auto';panel.style.bottom='auto';});
   panel.addEventListener('pointerup',()=>drag=null);
