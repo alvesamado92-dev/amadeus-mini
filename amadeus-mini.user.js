@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.3.6
+// @version      0.3.7
 // @description  Lightweight cross-platform Amadeus avatar
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -14,7 +14,7 @@
   const old = document.getElementById('amadeus-mini');
   if (old) old.remove();
   const names = ['neutral','thinking','happy','annoyed','embarrassed','surprised'];
-  const symbols = ['👩🏻‍🔬','🤔','😠','😳','😊','😮'];
+  const symbols = ['👩🏻‍🔬','🤔','😊','😠','😳','😮'];
   const panel = document.createElement('aside');
   panel.id = 'amadeus-mini';
   panel.setAttribute('aria-label','Amadeus avatar');
