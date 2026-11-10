@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.4.8
+// @version      0.4.9
 // @description  Cleaner avatar controls and compliment-aware reactions; no AI calls
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -37,6 +37,7 @@ panel.addEventListener('mouseleave',()=>{if(matchMedia('(hover:hover)').matches&
 
 let mood=-1, minimized=false, active=true, drag=null, until=0, signature='', lastPath=location.pathname;
 let assistantSignature='', assistantStable=0, userReactedAt=0, assistantBaseline='', assistantHandled=false;
+let stage='waiting', selected='none', source='none', responseLength=0, stableCount=0;
 const HOLD_MS=25000, CHECK_MS=2500;
 // Voice assets can be attached later. No synthesized voice or network access.
 const VOICE_ENABLED=false, VOICE_CLIPS=Object.freeze({});
@@ -73,11 +74,12 @@ function readMessages(){
 }
 function latestAssistantText(){
  const explicit=[...document.querySelectorAll('[data-message-author-role="assistant"]')].at(-1);
- if(explicit)return (explicit.innerText||explicit.textContent||'').trim().toLowerCase();
+ if(explicit){source='role';return (explicit.innerText||explicit.textContent||'').trim().toLowerCase();}
  // Firefox Android often omits role attributes. Rendered assistant prose
  // normally lives in a markdown container; user bubbles use whitespace-pre-wrap.
  const nodes=[...document.querySelectorAll('main .markdown, main [class*="markdown"]')].filter(el=>!el.parentElement?.closest('.markdown, [class*="markdown"]'));
  const node=nodes.at(-1);
+ source=node?'markdown':'missing';
  return (node?.innerText||node?.textContent||'').trim().toLowerCase();
 }
 function detect(){
@@ -93,20 +95,25 @@ function detect(){
    // Second phase: react to a completed assistant turn, only when the page
    // exposes a trustworthy assistant role. Never classify the user fallback.
    if(assistantHandled)return;
-   const response=latestAssistantText();
+   const response=latestAssistantText();responseLength=response.length;
    const key=location.pathname+'|'+response;
-   if(!response || response===assistantBaseline || response.length<20 || Date.now()-userReactedAt<3500)return;
-   if(key!==assistantSignature){assistantSignature=key;assistantStable=0;return;}
-   if(++assistantStable!==2)return;
-   assistantHandled=true;
+   if(!response){stage='no assistant text';return;}
+   if(response===assistantBaseline){stage='same as baseline';return;}
+   if(response.length<20){stage='response too short';return;}
+   if(Date.now()-userReactedAt<3500){stage='waiting 3.5s';return;}
+   if(key!==assistantSignature){assistantSignature=key;assistantStable=0;stage='response changing';return;}
+   if(++assistantStable!==2){stage='stabilizing';return;}
+   assistantHandled=true;stage='classified';
    const match=/\b(hmph|idiot|baka|annoyed|irritat)\b/.test(response)?3:
      /\b(embarrass|blush|fluster)\b/.test(response)?4:
      /\b(congratulat|great job|well done|excellent news)\b/.test(response)?2:
      /\b(surpris|unexpected|what\?!)\b/.test(response)?5:-1;
-   if(match>=0 && match!==mood)react(match);
+   selected=match<0?'no emotion':names[match];
+   if(match>=0 && match!==mood){react(match);stage='applied '+selected;}
+   else stage=match<0?'no matching emotion':'same expression';
    return;
  }
- signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();assistantHandled=false;userReactedAt=Date.now();
+ signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();assistantHandled=false;userReactedAt=Date.now();stage='user detected';selected='pending';responseLength=0;
  if(/\b(prettier|beautiful|cute|adorable|pretty|lovely|gorgeous|compliment|blush|fluster|embarrass)\b/.test(last))react(4);
  else if(/\b(thank|congratulat|well done|good job|great work|proud of you)\b/.test(last))react(2);
  else if(/\b(idiot|pervert|middle schooler|middle school degree|curriculum.*fake|stupid|baka)\b/.test(last))react(3);
@@ -118,11 +125,14 @@ function detect(){
  // Assistant text is intentionally not used here: streaming it could repeatedly
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
-debug.addEventListener('click',()=>{const msgs=readMessages(),users=msgs.filter(m=>m.role==='user'),last=users.at(-1)?.content||'';diagnostic.textContent='User messages: '+users.length+' | Last: '+(last.slice(0,100)||'[none]')+' | Mood: '+names[mood];diagnostic.style.display=diagnostic.style.display==='none'?'block':'none'});
+function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Current face: '+names[mood]+' | User messages: '+users.length;}
+debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'block';});
+
 // No network requests, no model calls. Stop scanning when the tab is hidden.
 function tick(){
  if(document.hidden)return;
  detect();
+ if(diagnostic.style.display==='block')refreshDiagnostics();
  if(mood!==0&&Date.now()>until)setMood(0);
 }
 setMood(0);
