@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.6.0
+// @version      0.6.1
 // @description  Adaptive voice cooldown, multiple clips per expression, selective reactions
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -49,6 +49,7 @@ const VOICE_PREFIX='amadeus-mini-voice-';
 const VOICE_LIBRARY='amadeus-mini-voice-library-v1';
 let voiceEnabled=false,lastVoiceAt=0,playing=null,lastVoiceKey='',lastVoiceMood='',lastVoiceKeyAt=0;
 let voiceHistory=[],voiceCursor={},voiceStatus='not tested';
+let manualUntil=0;
 function voiceClips(name){
  let list=[];
  try{const stored=JSON.parse(localStorage.getItem(VOICE_LIBRARY)||'{}');list=Array.isArray(stored[name])?stored[name]:[];}catch(e){}
@@ -109,14 +110,34 @@ voice.addEventListener('click',()=>{
  if(!voiceEnabled&&playing){playing.pause();playing=null;}
  // Do not automatically play audio merely because the user unmuted.
 });
-testAudio.addEventListener('click',()=>{if(!voiceEnabled){voiceStatus='muted - enable voice first';alert('Enable voice using ♪× before testing.');return;}voiceReaction(names[mood],true);setTimeout(refreshDiagnostics,250);});
+testAudio.addEventListener('click',()=>{
+ if(!voiceEnabled){voiceStatus='muted - enable voice first';alert('Enable voice using ♪× before testing.');return;}
+ let library=[];for(const name of names){for(const clip of voiceClips(name))library.push({name,clip});}
+ if(!library.length){voiceStatus='no imported clips in this browser';alert('No imported clips were found in this browser. Please import them again.');return;}
+ const menu=library.map((x,i)=>(i+1)+'. '+x.name+' — '+x.clip.label).join('\n');
+ const answer=prompt('Choose a recording to play:\n'+menu,'1');
+ if(answer===null)return;
+ const index=Number(answer)-1;
+ if(!Number.isInteger(index)||index<0||index>=library.length){alert('Select a number from the list.');return;}
+ const {name,clip}=library[index];
+ if(playing){playing.pause();playing=null;}
+ const audio=new Audio(clip.url);audio.volume=0.7;playing=audio;
+ voiceStatus='testing '+name+': '+clip.label;
+ audio.addEventListener('ended',()=>{if(playing===audio)playing=null},{once:true});
+ audio.addEventListener('error',()=>{voiceStatus='audio decode error: '+clip.label;if(playing===audio)playing=null},{once:true});
+ audio.play().then(()=>{voiceStatus='played '+name+': '+clip.label;}).catch(e=>{voiceStatus='playback blocked: '+(e?.name||'unknown');if(playing===audio)playing=null;});
+ setTimeout(refreshDiagnostics,250);
+});
 upload.title='Add a short audio clip for the current expression (multiple allowed)';
 upload.addEventListener('click',()=>picker.click());
 picker.addEventListener('change',()=>{
  const file=picker.files?.[0];picker.value='';
  if(!file||!file.type.startsWith('audio/'))return;
  if(file.size>500000){alert('Use a short audio clip under 500 KB.');return;}
- const moodName=names[mood],reader=new FileReader();
+ const chosen=prompt('Assign this clip to which expression?\n'+names.map((n,i)=>(i+1)+'. '+n).join('\n'),String(Math.max(1,mood+1)));
+ if(chosen===null)return;
+ const target=Number(chosen)-1;if(!Number.isInteger(target)||target<0||target>=names.length){alert('Invalid expression number.');return;}
+ const moodName=names[target],reader=new FileReader();
  reader.onload=()=>{
   try{
    const stored=JSON.parse(localStorage.getItem(VOICE_LIBRARY)||'{}');
@@ -135,6 +156,7 @@ let transitionTimer=null;
 const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches||false;
 if(reducedMotion)portrait.style.transition='none';
 function setMood(i){
+ if(Date.now()<manualUntil)return;
  if(i===mood)return;
  mood=i;panel.dataset.mood=names[i];
  if(transitionTimer!==null)clearTimeout(transitionTimer);
@@ -144,7 +166,7 @@ function setMood(i){
  transitionTimer=setTimeout(()=>{portrait.src=sprites[i];portrait.style.opacity='1';transitionTimer=null},110);
 }
 function react(i,audible=false,context=''){if(audible&&i!==1&&i!==0)voiceReaction(names[i],false,context);setMood(i);until=Date.now()+HOLD_MS}
-cycle.addEventListener('click',()=>react((mood+1)%names.length));
+cycle.addEventListener('click',()=>{manualUntil=0;react((mood+1)%names.length);manualUntil=Date.now()+30000;stage='manual expression (30s)';});
 collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=cycle.hidden=debug.hidden=voice.hidden=upload.hidden=testAudio.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';showControls(true)});
 panel.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;const r=panel.getBoundingClientRect();drag={x:e.clientX,y:e.clientY,left:r.left,top:r.top};panel.setPointerCapture(e.pointerId)});
 panel.addEventListener('pointermove',e=>{if(!drag)return;panel.style.left=Math.max(0,Math.min(innerWidth-panel.offsetWidth,drag.left+e.clientX-drag.x))+'px';panel.style.top=Math.max(0,Math.min(innerHeight-panel.offsetHeight,drag.top+e.clientY-drag.y))+'px';panel.style.right='auto';panel.style.bottom='auto'});
@@ -282,7 +304,7 @@ function detect(){
  // Assistant text is intentionally not used here: streaming it could repeatedly
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
-function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' ('+(generating&&generationSignal==='none'?'response growth':generationSignal)+') | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' ('+voiceClips(names[mood]).length+' clips) | Audio: '+voiceStatus+' | Current face: '+names[mood]+' | User messages: '+users.length;}
+function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' ('+(generating&&generationSignal==='none'?'response growth':generationSignal)+') | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' ('+voiceClips(names[mood]).length+' clips) | Audio: '+voiceStatus+' | Current face: '+names[mood]+' | Manual override: '+Math.max(0,Math.ceil((manualUntil-Date.now())/1000))+'s | User messages: '+users.length;}
 debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
 // No network requests, no model calls. Stop scanning when the tab is hidden.
