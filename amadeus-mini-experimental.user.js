@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.4.7
+// @version      0.4.8
 // @description  Cleaner avatar controls and compliment-aware reactions; no AI calls
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -36,7 +36,7 @@ panel.addEventListener('mouseenter',()=>{if(matchMedia('(hover:hover)').matches)
 panel.addEventListener('mouseleave',()=>{if(matchMedia('(hover:hover)').matches&&!minimized)showControls(false)});
 
 let mood=-1, minimized=false, active=true, drag=null, until=0, signature='', lastPath=location.pathname;
-let assistantSignature='', assistantStable=0, userReactedAt=0;
+let assistantSignature='', assistantStable=0, userReactedAt=0, assistantBaseline='', assistantHandled=false;
 const HOLD_MS=25000, CHECK_MS=2500;
 // Voice assets can be attached later. No synthesized voice or network access.
 const VOICE_ENABLED=false, VOICE_CLIPS=Object.freeze({});
@@ -71,8 +71,17 @@ function readMessages(){
  if(explicit.length)return explicit.map(el=>({role:el.getAttribute('data-message-author-role'),content:(el.innerText||el.textContent||'').trim().toLowerCase()}));
  return [...document.querySelectorAll('main .whitespace-pre-wrap,main [class*="whitespace-pre-wrap"]')].filter(el=>!el.querySelector('[class*="whitespace-pre-wrap"]')).map(el=>({role:'user',content:(el.innerText||el.textContent||'').trim().toLowerCase()})).filter(m=>m.content);
 }
+function latestAssistantText(){
+ const explicit=[...document.querySelectorAll('[data-message-author-role="assistant"]')].at(-1);
+ if(explicit)return (explicit.innerText||explicit.textContent||'').trim().toLowerCase();
+ // Firefox Android often omits role attributes. Rendered assistant prose
+ // normally lives in a markdown container; user bubbles use whitespace-pre-wrap.
+ const nodes=[...document.querySelectorAll('main .markdown, main [class*="markdown"]')].filter(el=>!el.parentElement?.closest('.markdown, [class*="markdown"]'));
+ const node=nodes.at(-1);
+ return (node?.innerText||node?.textContent||'').trim().toLowerCase();
+}
 function detect(){
- if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;until=0;setMood(0);}
+ if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;setMood(0);}
  const messages=readMessages(),users=messages.filter(m=>m.role==='user'),last=users.at(-1)?.content||'';
  const cmd=[...users].reverse().map(m=>m.content).find(t=>/\bamadeus\s+(on|off)\b/.test(t));if(cmd)active=!/\bamadeus\s+off\b/.test(cmd);
  panel.style.display=active?'':'none';if(!active)return;
@@ -83,12 +92,13 @@ function detect(){
  if(next===signature){
    // Second phase: react to a completed assistant turn, only when the page
    // exposes a trustworthy assistant role. Never classify the user fallback.
-   const explicitAssistant=[...document.querySelectorAll('[data-message-author-role="assistant"]')].at(-1);
-   const response=(explicitAssistant?.innerText||'').trim().toLowerCase();
+   if(assistantHandled)return;
+   const response=latestAssistantText();
    const key=location.pathname+'|'+response;
-   if(!response || response.length<20 || Date.now()-userReactedAt<3500)return;
+   if(!response || response===assistantBaseline || response.length<20 || Date.now()-userReactedAt<3500)return;
    if(key!==assistantSignature){assistantSignature=key;assistantStable=0;return;}
    if(++assistantStable!==2)return;
+   assistantHandled=true;
    const match=/\b(hmph|idiot|baka|annoyed|irritat)\b/.test(response)?3:
      /\b(embarrass|blush|fluster)\b/.test(response)?4:
      /\b(congratulat|great job|well done|excellent news)\b/.test(response)?2:
@@ -96,7 +106,7 @@ function detect(){
    if(match>=0 && match!==mood)react(match);
    return;
  }
- signature=next;assistantSignature='';assistantStable=0;userReactedAt=Date.now();
+ signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();assistantHandled=false;userReactedAt=Date.now();
  if(/\b(prettier|beautiful|cute|adorable|pretty|lovely|gorgeous|compliment|blush|fluster|embarrass)\b/.test(last))react(4);
  else if(/\b(thank|congratulat|well done|good job|great work|proud of you)\b/.test(last))react(2);
  else if(/\b(idiot|pervert|middle schooler|middle school degree|curriculum.*fake|stupid|baka)\b/.test(last))react(3);
