@@ -1,11 +1,14 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.7.1
-// @description  Independent voice tags, IndexedDB, bulk audio import and previews
+// @version      0.8.0
+// @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @connect      api.github.com
 // @noframes
 // @updateURL    https://raw.githubusercontent.com/alvesamado92-dev/amadeus-mini/main/amadeus-mini-experimental.user.js
 // @downloadURL  https://raw.githubusercontent.com/alvesamado92-dev/amadeus-mini/main/amadeus-mini-experimental.user.js
@@ -20,14 +23,14 @@ Object.assign(panel.style,{position:'fixed',right:'12px',bottom:'100px',zIndex:'
 const portrait=document.createElement('img');portrait.alt='Kurisu Amadeus portrait';portrait.draggable=false;portrait.decoding='async';portrait.style.cssText='width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;transition:opacity .18s ease';
 
 function button(t,title){const b=document.createElement('button');b.textContent=t;b.title=title;b.style.cssText='border:0;border-radius:6px;background:#53647e;color:white;padding:5px 9px;margin-top:5px;cursor:pointer';return b}
-const cycle=button('↻','Cycle expressions'),collapse=button('−','Minimize'),debug=button('?','Detection diagnostics'),voice=button('♪×','Voice muted; click to enable'),upload=button('♫+','Import an audio clip for the current expression'),testAudio=button('▶','Play a test clip for the current expression');
+const cycle=button('↻','Cycle expressions'),collapse=button('−','Minimize'),debug=button('?','Detection diagnostics'),voice=button('♪×','Voice muted; click to enable'),upload=button('♫+','Import an audio clip for the current expression'),testAudio=button('▶','Play a test clip'),syncVoice=button('⇣','Synchronize private GitHub voice library');
 const picker=document.createElement('input');picker.type='file';picker.accept='audio/*';picker.hidden=true;
 const diagnostic=document.createElement('div');diagnostic.style.cssText='display:none;position:absolute;right:110px;top:0;width:260px;max-width:calc(100vw - 130px);padding:12px;border-radius:10px;background:#202332;color:#fff;font-size:12px;line-height:1.5;overflow-wrap:anywhere;text-align:left;max-height:240px;overflow:auto;box-shadow:0 4px 18px #0007';
-diagnostic.setAttribute('aria-live','polite');panel.append(portrait,cycle,collapse,debug,voice,upload,testAudio,picker,diagnostic);document.body.append(panel);
+diagnostic.setAttribute('aria-live','polite');panel.append(portrait,cycle,collapse,debug,voice,upload,testAudio,syncVoice,picker,diagnostic);document.body.append(panel);
 let controlsTimer=null,controlsVisible=false;
 function showControls(show){
  controlsVisible=show;
- for(const b of [cycle,collapse,debug,voice,upload,testAudio]){b.style.opacity=show?'1':'0';b.style.pointerEvents=show?'auto':'none';}
+ for(const b of [cycle,collapse,debug,voice,upload,testAudio,syncVoice]){b.style.opacity=show?'1':'0';b.style.pointerEvents=show?'auto':'none';}
  if(!show && diagnostic.style.display!=='block')diagnostic.style.display='none';
 }
 function revealControls(){showControls(true);if(controlsTimer)clearTimeout(controlsTimer);controlsTimer=setTimeout(()=>{if(!minimized && diagnostic.style.display!=='block')showControls(false)},4500)}
@@ -47,6 +50,8 @@ const HOLD_MS=25000, CHECK_MS=350;
 // User-supplied clips stay in this browser's local storage; nothing is uploaded.
 const VOICE_LIBRARY='amadeus-mini-voice-library-v1';
 const VOICE_DB='amadeus-mini-audio-v2';
+const PRIVATE_REPO='alvesamado92-dev/amadeus-voice-library';
+const PRIVATE_TOKEN_KEY='amadeus-private-voice-token-v1';
 const VOICE_TAGS=['surprise','teasing','strong_annoyance','agreement','attention','hesitation','curiosity','celebration','other'];
 let voiceEnabled=false,playing=null,voiceStatus='initializing',voiceClips=[],voiceLastAt=0,voiceHistory=[],voiceLastId='',voiceLastTag='',voiceLastClipAt=0;
 let manualUntil=0;
@@ -93,6 +98,66 @@ async function reloadVoice(){
  try{voiceClips=await getStoredClips();voiceStatus='ready: '+voiceClips.length+' clip(s)';}
  catch(e){voiceStatus='storage error: '+(e?.name||e?.message||'unknown');}
 }
+// Private GitHub access is opt-in. Credentials stay in Tampermonkey's isolated storage,
+// never in ChatGPT localStorage, URLs, logs or the repository. Use a read-only fine-grained token.
+function githubRequest(path,token,binary=false){
+ return new Promise((resolve,reject)=>{
+  GM_xmlhttpRequest({method:'GET',url:'https://api.github.com/repos/'+PRIVATE_REPO+'/contents/'+path,
+   headers:{'Authorization':'Bearer '+token,'Accept':'application/vnd.github.raw+json','X-GitHub-Api-Version':'2022-11-28'},
+   responseType:binary?'arraybuffer':'text',timeout:20000,
+   onload:r=>r.status>=200&&r.status<300?resolve(r.response):reject(Error('GitHub HTTP '+r.status)),
+   onerror:()=>reject(Error('GitHub connection failed')),ontimeout:()=>reject(Error('GitHub timed out'))});
+ });
+}
+function decodeGithubText(raw){
+ if(typeof raw==='string'){
+  const obj=JSON.parse(raw);
+  if(Array.isArray(obj))throw Error('Catalog path is a directory');
+  if(obj.content&&obj.encoding==='base64')return JSON.parse(atob(obj.content.replace(/\\s/g,'')));
+  return obj;
+ }
+ throw Error('Unexpected catalog response');
+}
+let syncBusy=false;
+async function synchronizePrivateVoice(interactive=false){
+ if(syncBusy)return;
+ if(typeof GM_xmlhttpRequest!=='function'||typeof GM_getValue!=='function'){
+  voiceStatus='Tampermonkey grants unavailable';if(interactive)alert(voiceStatus);return;
+ }
+ let token=GM_getValue(PRIVATE_TOKEN_KEY,'');
+ if(interactive){
+  const action=prompt('Private voice library: Enter a fine-grained GitHub token (Contents: Read-only, ONLY amadeus-voice-library).\\nType REMOVE to delete the saved token, or leave blank to use the saved token.',token?'':'');
+  if(action===null)return;
+  if(action.trim().toUpperCase()==='REMOVE'){GM_setValue(PRIVATE_TOKEN_KEY,'');voiceStatus='private token removed';alert('Saved token removed. Cached recordings remain.');return;}
+  if(action.trim()){token=action.trim();GM_setValue(PRIVATE_TOKEN_KEY,token);}
+ }
+ if(!token){voiceStatus='private sync not configured';if(interactive)alert('Create a fine-grained GitHub token restricted to this private repository with Contents: Read-only, then click ⇣ again.');return;}
+ syncBusy=true;voiceStatus='checking private voice catalog';
+ try{
+  const catalog=decodeGithubText(await githubRequest('catalog.json',token));
+  if(!Array.isArray(catalog.clips))throw Error('Invalid catalog');
+  const existing=new Set((await getStoredClips()).map(c=>c.id));
+  let added=0,skipped=0;
+  for(const item of catalog.clips){
+   if(item.status!=='uploaded-verified'||!item.path||!VOICE_TAGS.includes(item.tag)){skipped++;continue;}
+   const id='github-'+item.id;
+   if(existing.has(id)){skipped++;continue;}
+   if(!/^[a-zA-Z0-9_.\\/-]+\\.(mp3|wav|ogg|m4a|webm)$/i.test(item.path)||item.path.includes('..')){skipped++;continue;}
+   voiceStatus='downloading '+item.id;
+   const data=await githubRequest(item.path.split('/').map(encodeURIComponent).join('/'),token,true);
+   if(!(data instanceof ArrayBuffer)||data.byteLength<100||data.byteLength>8000000)throw Error('Invalid audio size for '+item.id);
+   const ext=item.path.split('.').pop().toLowerCase();
+   const mime=ext==='mp3'?'audio/mpeg':ext==='wav'?'audio/wav':ext==='ogg'?'audio/ogg':ext==='m4a'?'audio/mp4':'audio/webm';
+   await storeClip({id,label:item.filename||item.id,tag:item.tag,blob:new Blob([data],{type:mime}),source:'private-github'});
+   existing.add(id);added++;
+  }
+  await reloadVoice();voiceStatus='private sync: '+added+' new, '+skipped+' skipped';
+  if(interactive)alert('Private voice sync complete: '+added+' new recordings. '+skipped+' unchanged or unavailable.');
+ }catch(e){voiceStatus='private sync failed: '+(e?.message||'unknown');if(interactive)alert(voiceStatus+'\\nCheck token permissions and the repository catalog.');}
+ finally{syncBusy=false;}
+}
+syncVoice.addEventListener('click',()=>synchronizePrivateVoice(true));
+if(typeof GM_getValue==='function'&&GM_getValue(PRIVATE_TOKEN_KEY,''))setTimeout(()=>synchronizePrivateVoice(false),2500);
 async function migrateLegacyVoice(){
  try{
   const old=JSON.parse(localStorage.getItem(VOICE_LIBRARY)||'{}');
@@ -359,7 +424,7 @@ function detect(){
 function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' | Stored clips: '+voiceClips.map(c=>c.label+' ['+c.tag+']').join(', ')+' | Audio: '+voiceStatus+' | Current face: '+names[mood]+' | Manual override: '+Math.max(0,Math.ceil((manualUntil-Date.now())/1000))+'s | User messages: '+users.length;}
 debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
-// No network requests, no model calls. Stop scanning when the tab is hidden.
+// Network access is limited to opt-in private GitHub voice synchronization; no model calls.
 function tick(){
  if(document.hidden)return;
  detect();
