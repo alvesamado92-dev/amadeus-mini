@@ -47,7 +47,7 @@ const HOLD_MS=25000, CHECK_MS=350;
 // User-supplied clips stay in this browser's local storage; nothing is uploaded.
 const VOICE_PREFIX='amadeus-mini-voice-';
 const VOICE_LIBRARY='amadeus-mini-voice-library-v1';
-let voiceEnabled=false,lastVoiceAt=0,playing=null,lastVoiceKey='',lastVoiceKeyAt=0;
+let voiceEnabled=false,lastVoiceAt=0,playing=null,lastVoiceKey='',lastVoiceMood='',lastVoiceKeyAt=0;
 let voiceHistory=[],voiceCursor={};
 function voiceClips(name){
  let list=[];
@@ -87,7 +87,7 @@ function voiceReaction(name,preview=false,context=''){
   if(voiceHistory.length>=3||now-lastVoiceAt<3000)return;
   // An ordinary reaction gets a 9-second gap; an emotionally distinct
   // follow-up can play after 3 seconds.
-  if(now-lastVoiceAt<9000&&name===lastVoiceKey)return;
+  if(now-lastVoiceAt<9000&&name===lastVoiceMood)return;
  }
  const clip=chooseClip(name,context);if(!clip)return;
  if(!preview&&clip.id===lastVoiceKey&&now-lastVoiceKeyAt<20000)return;
@@ -98,7 +98,7 @@ function voiceReaction(name,preview=false,context=''){
  audio.addEventListener('ended',()=>{if(playing===audio)playing=null},{once:true});
  audio.addEventListener('error',()=>{if(playing===audio)playing=null},{once:true});
  audio.play().then(()=>{
-  if(!preview){lastVoiceAt=now;voiceHistory.push(now);lastVoiceKey=clip.id;lastVoiceKeyAt=now;}
+  if(!preview){lastVoiceAt=now;voiceHistory.push(now);lastVoiceKey=clip.id;lastVoiceMood=name;lastVoiceKeyAt=now;}
  }).catch(()=>{if(playing===audio)playing=null});
 }
 voice.addEventListener('click',()=>{
