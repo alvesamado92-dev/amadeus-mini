@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.8.2
+// @version      0.8.3
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -248,19 +248,53 @@ testAudio.addEventListener('click',async()=>{
  await playClip(voiceClips[index],true);
  refreshDiagnostics();
 });
-deleteVoice.addEventListener('click',async()=>{
- await reloadVoice();
- if(!voiceClips.length){alert('There are no locally stored clips to delete.');return;}
- const menu=voiceClips.map((c,i)=>(i+1)+'. '+c.label+' ['+c.tag+']'+(c.source==='private-github'?' (synced)':'')).join('\\n');
- const choice=prompt('Delete one local clip (number):\\n'+menu,'');
- if(choice===null||!choice.trim())return;
- const index=Number(choice)-1;
- if(!Number.isInteger(index)||index<0||index>=voiceClips.length){alert('Invalid clip number');return;}
- const clip=voiceClips[index];
- if(!confirm('Permanently remove this local clip?\\n'+clip.label+' ['+clip.tag+']'+(clip.source==='private-github'?'\\nIt may return during the next GitHub synchronization.':'')))return;
- try{if(playing)stopVoice();await removeClip(clip.id);await reloadVoice();voiceStatus='deleted '+clip.label;alert('Deleted local recording: '+clip.label);}
- catch(e){voiceStatus='delete failed: '+(e?.message||'unknown');alert(voiceStatus);}
-});
+let voiceLibraryOverlay=null;
+function openVoiceLibrary(){
+ if(voiceLibraryOverlay){voiceLibraryOverlay.remove();voiceLibraryOverlay=null;return;}
+ const overlay=document.createElement('div');voiceLibraryOverlay=overlay;
+ overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(7,11,22,.72);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;font:14px system-ui,-apple-system,sans-serif;color:#eef3ff;touch-action:auto;user-select:text';
+ const dialog=document.createElement('section');
+ dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label','Amadeus voice library');
+ dialog.style.cssText='width:min(470px,100%);max-height:min(620px,85vh);background:#192133;border:1px solid #52617b;border-radius:16px;box-shadow:0 20px 60px #0009;display:flex;flex-direction:column;overflow:hidden';
+ const header=document.createElement('div');header.style.cssText='padding:18px 18px 12px;display:flex;justify-content:space-between;align-items:center;gap:12px';
+ const heading=document.createElement('div');const title=document.createElement('div');title.textContent='Amadeus · Voice Library';title.style.cssText='font-size:17px;font-weight:700';const subtitle=document.createElement('div');subtitle.style.cssText='font-size:12px;color:#aab9d0;margin-top:4px';heading.append(title,subtitle);
+ const close=document.createElement('button');close.textContent='✕';close.title='Close voice library';close.style.cssText='background:#35435b;border:0;border-radius:8px;color:white;padding:8px 12px;cursor:pointer;font-size:15px';
+ const list=document.createElement('div');list.style.cssText='overflow-y:auto;padding:4px 14px 14px;min-height:50px;overscroll-behavior:contain';
+ const footer=document.createElement('div');footer.textContent='Local recordings only · Synced clips return on the next sync';footer.style.cssText='padding:12px 18px;color:#aab9d0;border-top:1px solid #35435b;font-size:11px';
+ header.append(heading,close);dialog.append(header,list,footer);overlay.append(dialog);document.body.append(overlay);
+ const dismiss=()=>{overlay.remove();if(voiceLibraryOverlay===overlay)voiceLibraryOverlay=null;document.removeEventListener('keydown',keyHandler,true)};
+ const keyHandler=e=>{if(e.key==='Escape'){e.stopPropagation();dismiss()}};
+ close.addEventListener('click',dismiss);overlay.addEventListener('click',e=>{if(e.target===overlay)dismiss()});dialog.addEventListener('pointerdown',e=>e.stopPropagation());document.addEventListener('keydown',keyHandler,true);
+ const btn=(label,color)=>{const el=document.createElement('button');el.textContent=label;el.style.cssText='border:0;border-radius:7px;padding:7px 10px;background:'+color+';color:white;cursor:pointer;font:12px system-ui,sans-serif;flex-shrink:0';return el};
+ const render=async()=>{
+  list.replaceChildren();subtitle.textContent='Loading recordings…';
+  try{await reloadVoice();subtitle.textContent=voiceClips.length+' stored recording'+(voiceClips.length===1?'':'s');
+   if(!voiceClips.length){const empty=document.createElement('p');empty.textContent='No audio recordings stored yet.';empty.style.color='#aab9d0';list.append(empty);return;}
+   for(const clip of voiceClips){
+    const row=document.createElement('div');row.style.cssText='display:flex;align-items:center;gap:12px;padding:12px 8px;border-bottom:1px solid #35435b';
+    const info=document.createElement('div');info.style.cssText='flex:1;min-width:0';
+    const name=document.createElement('div');name.textContent=clip.label;name.title=clip.label;name.style.cssText='font-weight:600;overflow-wrap:anywhere;line-height:1.4';
+    const meta=document.createElement('div');meta.textContent=clip.tag.replace(/_/g,' ')+' · '+(clip.source==='private-github'?'GitHub synced':'Local import');meta.style.cssText='font-size:11px;color:#aab9d0;margin-top:4px';
+    info.append(name,meta);
+    const del=btn('Delete','#a43c4a');del.setAttribute('aria-label','Delete '+clip.label);
+    del.addEventListener('click',()=>{
+     if(del.dataset.confirm==='yes')return;
+     del.dataset.confirm='yes';del.textContent='Confirm';del.style.background='#c85b35';
+     const cancel=btn('Cancel','#43536e');row.append(cancel);
+     cancel.addEventListener('click',()=>{cancel.remove();del.dataset.confirm='';del.textContent='Delete';del.style.background='#a43c4a';del.onclick=null});
+     del.addEventListener('click',async function confirmDelete(){
+      del.removeEventListener('click',confirmDelete);del.disabled=true;del.textContent='Deleting…';
+      try{if(playing)stopVoice();await removeClip(clip.id);await render();voiceStatus='deleted '+clip.label;}
+      catch(e){del.disabled=false;del.textContent='Retry';subtitle.textContent='Delete failed: '+(e?.message||'unknown');del.addEventListener('click',confirmDelete,{once:true});}
+     },{once:true});
+    },{once:true});
+    row.append(info,del);list.append(row);
+   }
+  }catch(e){subtitle.textContent='Library error: '+(e?.message||'unknown');}
+ };
+ render();
+}
+deleteVoice.addEventListener('click',openVoiceLibrary);
 upload.title='Import a voice line independently of facial expressions (stored in IndexedDB)';
 upload.title='Import one or multiple audio recordings into IndexedDB; filenames determine reaction tags';
 picker.multiple=true;
