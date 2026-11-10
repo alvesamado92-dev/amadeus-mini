@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.3.5
+// @version      0.3.6
 // @description  Lightweight cross-platform Amadeus avatar
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -46,7 +46,7 @@
       return ancestors.join(' > ');
     });
     diagnostic.textContent='User messages: '+users.length+' | Last: '+(last.slice(0,80)||'[none]')+' | Christina detected: '+(/christina/.test(last)?'YES':'NO')+' | '+counts+' | Matching elements: '+(samples.join(' || ')||'[none]');
-    diagnostic.style.maxHeight='220px';
+    diagnostic.style.maxHeight='120px';
     diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';
   });
   let mood=-1, minimized=false, active=true, drag=null;
@@ -113,7 +113,7 @@
     const signature = last + '|' + assistant.slice(-500);
     if (signature === lastSignature) return;
     lastSignature = signature;
-    if (/christina|idiot|pervert/.test(last)) setMood(3);
+    if (/christina|idiot|pervert|curriculum.*fake|middle school degree/.test(last)) setMood(3);
     else if (/embarrass|blush|w-what/.test(assistant)) setMood(4);
     else if (/success|excellent|great news|worked/.test(assistant)) setMood(2);
     else if (/surpris|unexpected/.test(assistant)) setMood(5);
