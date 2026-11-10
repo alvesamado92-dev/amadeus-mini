@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.5.1
+// @version      0.5.2
 // @description  Cleaner avatar controls and compliment-aware reactions; no AI calls
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -21,20 +21,20 @@ const portrait=document.createElement('img');portrait.alt='Kurisu Amadeus portra
 
 function button(t,title){const b=document.createElement('button');b.textContent=t;b.title=title;b.style.cssText='border:0;border-radius:6px;background:#53647e;color:white;padding:5px 9px;margin-top:5px;cursor:pointer';return b}
 const cycle=button('↻','Cycle expressions'),collapse=button('−','Minimize'),debug=button('?','Detection diagnostics');
-const diagnostic=document.createElement('div');diagnostic.style.cssText='display:none;font-size:10px;overflow-wrap:anywhere;text-align:left;margin-top:6px;max-height:120px;overflow:auto';
+const diagnostic=document.createElement('div');diagnostic.style.cssText='display:none;position:absolute;right:110px;top:0;width:260px;max-width:calc(100vw - 130px);padding:12px;border-radius:10px;background:#202332;color:#fff;font-size:12px;line-height:1.5;overflow-wrap:anywhere;text-align:left;max-height:240px;overflow:auto;box-shadow:0 4px 18px #0007';
 diagnostic.setAttribute('aria-live','polite');panel.append(portrait,cycle,collapse,debug,diagnostic);document.body.append(panel);
 let controlsTimer=null,controlsVisible=false;
 function showControls(show){
  controlsVisible=show;
  for(const b of [cycle,collapse,debug]){b.style.opacity=show?'1':'0';b.style.pointerEvents=show?'auto':'none';}
- if(!show)diagnostic.style.display='none';
+ if(!show && diagnostic.style.display!=='block')diagnostic.style.display='none';
 }
-function revealControls(){showControls(true);if(controlsTimer)clearTimeout(controlsTimer);controlsTimer=setTimeout(()=>{if(!minimized)showControls(false)},4500)}
-function toggleControls(){if(controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}if(controlsVisible){showControls(false)}else{revealControls()}}
+function revealControls(){showControls(true);if(controlsTimer)clearTimeout(controlsTimer);controlsTimer=setTimeout(()=>{if(!minimized && diagnostic.style.display!=='block')showControls(false)},4500)}
+function toggleControls(){if(controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}if(controlsVisible){diagnostic.style.display='none';showControls(false)}else{revealControls()}}
 showControls(false);
 portrait.addEventListener('click',toggleControls);
 panel.addEventListener('mouseenter',()=>{if(matchMedia('(hover:hover)').matches)revealControls()});
-panel.addEventListener('mouseleave',()=>{if(matchMedia('(hover:hover)').matches&&!minimized)showControls(false)});
+panel.addEventListener('mouseleave',()=>{if(matchMedia('(hover:hover)').matches&&!minimized && diagnostic.style.display!=='block')showControls(false)});
 
 let mood=-1, minimized=false, active=true, drag=null, until=0, signature='', lastPath=location.pathname;
 let assistantSignature='', assistantStable=0, userReactedAt=0, assistantBaseline='', assistantHandled=false;
@@ -70,7 +70,16 @@ panel.addEventListener('pointerup',()=>drag=null);panel.addEventListener('pointe
 window.addEventListener('resize',()=>{if(panel.style.left){panel.style.left=Math.max(0,Math.min(innerWidth-panel.offsetWidth,parseFloat(panel.style.left)||0))+'px';panel.style.top=Math.max(0,Math.min(innerHeight-panel.offsetHeight,parseFloat(panel.style.top)||0))+'px';}});
 function readMessages(){
  const headings=[...document.querySelectorAll('main [data-conversation-role]')];
- if(headings.length)return headings.map(el=>({role:el.getAttribute('data-conversation-role'),content:[...el.parentElement.children].filter(child=>child!==el).map(child=>child.innerText||child.textContent||'').join(' ').trim().toLowerCase()}));
+ if(headings.length)return headings.map(el=>{
+  const role=el.getAttribute('data-conversation-role');
+  const parent=el.parentElement;
+  let content=[...parent.children].filter(child=>child!==el).map(child=>child.innerText||child.textContent||'').join(' ').trim();
+  if(role==='user'){
+    const bubble=parent.querySelector('[data-user-message-bubble] .whitespace-pre-wrap, .whitespace-pre-wrap');
+    if(bubble)content=(bubble.innerText||bubble.textContent||'').trim();
+  }
+  return {role,content:content.toLowerCase()};
+ });
  const explicit=[...document.querySelectorAll('[data-message-author-role]')];
  if(explicit.length)return explicit.map(el=>({role:el.getAttribute('data-message-author-role'),content:(el.innerText||el.textContent||'').trim().toLowerCase()}));
  return [...document.querySelectorAll('main .whitespace-pre-wrap,main [class*="whitespace-pre-wrap"]')].filter(el=>!el.querySelector('[class*="whitespace-pre-wrap"]')).map(el=>({role:'user',content:(el.innerText||el.textContent||'').trim().toLowerCase()})).filter(m=>m.content);
@@ -135,7 +144,7 @@ function detect(){
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
 function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Current face: '+names[mood]+' | User messages: '+users.length;}
-debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';});
+debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
 // No network requests, no model calls. Stop scanning when the tab is hidden.
 function tick(){
