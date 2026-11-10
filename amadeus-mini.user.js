@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.3.3
+// @version      0.3.4
 // @description  Lightweight cross-platform Amadeus avatar
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -37,7 +37,7 @@
     const messages=readMessages();
     const users=messages.filter(m=>m.role==='user');
     const last=users.at(-1)?.content||'';
-    diagnostic.textContent='User messages: '+users.length+' | Last: '+(last.slice(0,100)||'[none]')+' | Christina detected: '+(/christina/.test(last)?'YES':'NO');
+    diagnostic.textContent='User messages: '+users.length+' | Last: '+(last.slice(0,100)||'[none]')+' | Christina detected: '+(/christina/.test(last)?'YES':'NO')+' | Turn containers: '+document.querySelectorAll('[data-testid^="conversation-turn-"],[data-turn-id]').length+' | Text blocks: '+document.querySelectorAll('main .whitespace-pre-wrap').length;
     diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';
   });
   let mood=-1, minimized=false, active=true, drag=null;
@@ -51,17 +51,41 @@
   // Read rendered messages, not the floating widget itself.
   // ChatGPT's DOM can vary across desktop and mobile releases.
   function readMessages() {
-    const nodes = [...document.querySelectorAll('[data-message-author-role], [data-testid^="conversation-turn-"]')];
+    // Current ChatGPT uses different turn containers on different clients.
+    const selectors = [
+      '[data-message-author-role]',
+      '[data-testid^="conversation-turn-"]',
+      'article[data-turn-id]',
+      '[data-turn-id]',
+      'main article',
+      'main [data-testid*="turn"]'
+    ];
+    const nodes = [...new Set(selectors.flatMap(q=>[...document.querySelectorAll(q)]))];
     const out = [];
     for (const el of nodes) {
-      if (el.matches('[data-testid^="conversation-turn-"]') &&
-          el.querySelector('[data-message-author-role]')) continue;
-      const role = el.getAttribute('data-message-author-role') ||
-        (el.querySelector('[data-message-author-role]')?.getAttribute('data-message-author-role')) ||
-        (/user/i.test(el.getAttribute('data-testid') || '') ? 'user' : '');
+      if (nodes.some(other=>other!==el && other.contains(el) &&
+          (other.hasAttribute('data-message-author-role') ||
+           other.hasAttribute('data-turn-id')))) continue;
+      const roleAttr = el.getAttribute('data-message-author-role') ||
+        el.querySelector('[data-message-author-role]')?.getAttribute('data-message-author-role');
+      const testId = el.getAttribute('data-testid') || '';
+      const cls = String(el.className || '');
+      const role = roleAttr ||
+        (/user/i.test(testId+' '+cls) ? 'user' :
+         /assistant/i.test(testId+' '+cls) ? 'assistant' : '');
       if (role !== 'user' && role !== 'assistant') continue;
       const content = (el.innerText || el.textContent || '').trim().toLowerCase();
       if (content) out.push({role, content});
+    }
+    // Fallback: ChatGPT renders user text in a .whitespace-pre-wrap block
+    // inside the user turn, even when author-role attributes are absent.
+    if (!out.some(m=>m.role==='user')) {
+      const blocks=[...document.querySelectorAll('main .whitespace-pre-wrap, main [class*="whitespace-pre-wrap"]')];
+      for (const el of blocks) {
+        if (el.closest('#amadeus-mini')) continue;
+        const content=(el.innerText||el.textContent||'').trim().toLowerCase();
+        if (content) out.push({role:'user',content});
+      }
     }
     return out;
   }
