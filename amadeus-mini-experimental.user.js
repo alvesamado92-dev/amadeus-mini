@@ -142,7 +142,7 @@ async function synchronizePrivateVoice(interactive=false){
    if(item.status!=='uploaded-verified'||!item.path||!VOICE_TAGS.includes(item.tag)){skipped++;continue;}
    const id='github-'+item.id;
    if(existing.has(id)){skipped++;continue;}
-   if(!/^[a-zA-Z0-9_.\\/-]+\\.(mp3|wav|ogg|m4a|webm)$/i.test(item.path)||item.path.includes('..')){skipped++;continue;}
+   if(!/^[a-zA-Z0-9_.\/-]+\.(mp3|wav|ogg|m4a|webm)$/i.test(item.path)||item.path.includes('..')){skipped++;continue;}
    voiceStatus='downloading '+item.id;
    const data=await githubRequest(item.path.split('/').map(encodeURIComponent).join('/'),token,true);
    if(!(data instanceof ArrayBuffer)||data.byteLength<100||data.byteLength>8000000)throw Error('Invalid audio size for '+item.id);
