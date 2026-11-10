@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.5.3
-// @description  Cleaner avatar controls and compliment-aware reactions; no AI calls
+// @version      0.5.4
+// @description  Generation-aware thinking portrait and opt-in local voice clips; no AI calls
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
 // @grant        none
@@ -20,13 +20,14 @@ Object.assign(panel.style,{position:'fixed',right:'12px',bottom:'100px',zIndex:'
 const portrait=document.createElement('img');portrait.alt='Kurisu Amadeus portrait';portrait.draggable=false;portrait.decoding='async';portrait.style.cssText='width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;transition:opacity .18s ease';
 
 function button(t,title){const b=document.createElement('button');b.textContent=t;b.title=title;b.style.cssText='border:0;border-radius:6px;background:#53647e;color:white;padding:5px 9px;margin-top:5px;cursor:pointer';return b}
-const cycle=button('↻','Cycle expressions'),collapse=button('−','Minimize'),debug=button('?','Detection diagnostics');
+const cycle=button('↻','Cycle expressions'),collapse=button('−','Minimize'),debug=button('?','Detection diagnostics'),voice=button('♪×','Voice muted; click to enable'),upload=button('♫+','Import an audio clip for the current expression');
+const picker=document.createElement('input');picker.type='file';picker.accept='audio/*';picker.hidden=true;
 const diagnostic=document.createElement('div');diagnostic.style.cssText='display:none;position:absolute;right:110px;top:0;width:260px;max-width:calc(100vw - 130px);padding:12px;border-radius:10px;background:#202332;color:#fff;font-size:12px;line-height:1.5;overflow-wrap:anywhere;text-align:left;max-height:240px;overflow:auto;box-shadow:0 4px 18px #0007';
-diagnostic.setAttribute('aria-live','polite');panel.append(portrait,cycle,collapse,debug,diagnostic);document.body.append(panel);
+diagnostic.setAttribute('aria-live','polite');panel.append(portrait,cycle,collapse,debug,voice,upload,picker,diagnostic);document.body.append(panel);
 let controlsTimer=null,controlsVisible=false;
 function showControls(show){
  controlsVisible=show;
- for(const b of [cycle,collapse,debug]){b.style.opacity=show?'1':'0';b.style.pointerEvents=show?'auto':'none';}
+ for(const b of [cycle,collapse,debug,voice,upload]){b.style.opacity=show?'1':'0';b.style.pointerEvents=show?'auto':'none';}
  if(!show && diagnostic.style.display!=='block')diagnostic.style.display='none';
 }
 function revealControls(){showControls(true);if(controlsTimer)clearTimeout(controlsTimer);controlsTimer=setTimeout(()=>{if(!minimized && diagnostic.style.display!=='block')showControls(false)},4500)}
@@ -39,15 +40,38 @@ panel.addEventListener('mouseleave',()=>{if(matchMedia('(hover:hover)').matches&
 let mood=-1, minimized=false, active=true, drag=null, until=0, signature='', lastPath=location.pathname;
 let assistantSignature='', assistantStable=0, userReactedAt=0, assistantBaseline='', assistantHandled=false;
 let stage='waiting', selected='none', source='none', responseLength=0, stableCount=0;
-const HOLD_MS=25000, CHECK_MS=2500;
-// Voice assets can be attached later. No synthesized voice or network access.
-const VOICE_ENABLED=false, VOICE_CLIPS=Object.freeze({});
-let lastVoiceAt=0;
-function voiceReaction(name){
- if(!VOICE_ENABLED || document.hidden || Date.now()-lastVoiceAt<12000)return;
- const url=VOICE_CLIPS[name];if(!url)return;
- lastVoiceAt=Date.now();const audio=new Audio(url);audio.volume=0.5;audio.play().catch(()=>{});
+let generating=false, thinkingStarted=0;
+const HOLD_MS=25000, CHECK_MS=800;
+// User-supplied clips stay in this browser's local storage; nothing is uploaded.
+const VOICE_PREFIX='amadeus-mini-voice-';
+let voiceEnabled=false,lastVoiceAt=0,playing=null;
+function voiceReaction(name,preview=false){
+ if(!voiceEnabled || document.hidden || (!preview&&Date.now()-lastVoiceAt<12000))return;
+ let url=null;try{url=localStorage.getItem(VOICE_PREFIX+name)}catch(e){}
+ if(!url)return;
+ lastVoiceAt=Date.now();
+ if(playing){playing.pause();playing=null;}
+ const audio=new Audio(url);audio.volume=0.5;playing=audio;
+ audio.play().catch(()=>{});audio.addEventListener('ended',()=>{if(playing===audio)playing=null},{once:true});
 }
+voice.addEventListener('click',()=>{
+ voiceEnabled=!voiceEnabled;voice.textContent=voiceEnabled?'♪':'♪×';
+ voice.title=voiceEnabled?'Voice enabled; click to mute':'Voice muted; click to enable';
+ if(!voiceEnabled&&playing){playing.pause();playing=null;}
+ if(voiceEnabled)voiceReaction(names[mood],true);
+});
+upload.addEventListener('click',()=>picker.click());
+picker.addEventListener('change',()=>{
+ const file=picker.files?.[0];picker.value='';
+ if(!file||!file.type.startsWith('audio/'))return;
+ if(file.size>350000){alert('Use a short audio clip under 350 KB.');return;}
+ const moodName=names[mood],reader=new FileReader();
+ reader.onload=()=>{
+  try{localStorage.setItem(VOICE_PREFIX+moodName,String(reader.result));upload.title='Saved '+moodName+' clip locally';if(voiceEnabled)voiceReaction(moodName,true);}
+  catch(e){alert('Could not save clip in browser storage. Try a smaller audio file.');}
+ };
+ reader.readAsDataURL(file);
+});
 
 let transitionTimer=null;
 const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches||false;
@@ -63,7 +87,7 @@ function setMood(i){
 }
 function react(i){if(i!==mood)voiceReaction(names[i]);setMood(i);until=Date.now()+HOLD_MS}
 cycle.addEventListener('click',()=>react((mood+1)%names.length));
-collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=cycle.hidden=debug.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';showControls(true)});
+collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=cycle.hidden=debug.hidden=voice.hidden=upload.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';showControls(true)});
 panel.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;const r=panel.getBoundingClientRect();drag={x:e.clientX,y:e.clientY,left:r.left,top:r.top};panel.setPointerCapture(e.pointerId)});
 panel.addEventListener('pointermove',e=>{if(!drag)return;panel.style.left=Math.max(0,Math.min(innerWidth-panel.offsetWidth,drag.left+e.clientX-drag.x))+'px';panel.style.top=Math.max(0,Math.min(innerHeight-panel.offsetHeight,drag.top+e.clientY-drag.y))+'px';panel.style.right='auto';panel.style.bottom='auto'});
 panel.addEventListener('pointerup',()=>drag=null);panel.addEventListener('pointercancel',()=>drag=null);panel.addEventListener('lostpointercapture',()=>drag=null);
@@ -119,8 +143,12 @@ function assistantEmotion(t){
  if(has(t,/\b(surpris\w*|unexpected|what\?!|surpres[ao]|inesperad[ao]|inacreditavel)\b/))return 5;
  return -1;
 }
+function isGenerating(){
+ // ChatGPT exposes a stop-generation control while an answer is streaming.
+ return !!document.querySelector('button[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"],button[aria-label="Parar geração"],button[aria-label="Interromper geração"]');
+}
 function detect(){
- if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;setMood(0);}
+ if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;generating=false;setMood(0);}
  const messages=readMessages(),users=messages.filter(m=>m.role==='user'),last=users.at(-1)?.content||'';
  const cmd=[...users].reverse().map(m=>m.content).find(t=>/\bamadeus\s+(on|off)\b/.test(t));if(cmd)active=!/\bamadeus\s+off\b/.test(cmd);
  panel.style.display=active?'':'none';if(!active)return;
@@ -129,6 +157,14 @@ function detect(){
  // Otherwise a single 'Christina' keeps restarting the 25-second timer.
  const next=location.pathname+'|'+users.length+'|'+last;
  if(next===signature){
+   // While the response is actively generating, use the thinking portrait.
+   // Do not classify a partial response as a completed assistant turn.
+   if(isGenerating()){
+     if(!generating){generating=true;thinkingStarted=Date.now();}
+     if(Date.now()-thinkingStarted>=500){setMood(1);until=Date.now()+HOLD_MS;}
+     stage='generating';return;
+   }
+   if(generating){generating=false;assistantSignature='';assistantStable=0;userReactedAt=Math.min(userReactedAt,Date.now()-3500);}
    // Second phase: react to a completed assistant turn, only when the page
    // exposes a trustworthy assistant role. Never classify the user fallback.
    if(assistantHandled)return;
@@ -147,13 +183,13 @@ function detect(){
    else stage=match<0?'no matching emotion':'same expression';
    return;
  }
- signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();assistantHandled=false;userReactedAt=Date.now();stage='user detected';selected='pending';responseLength=0;
+ signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();assistantHandled=false;generating=false;userReactedAt=Date.now();stage='user detected';selected='pending';responseLength=0;
  const userMatch=userEmotion(last);
  if(userMatch>=0)react(userMatch);
  // Assistant text is intentionally not used here: streaming it could repeatedly
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
-function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Current face: '+names[mood]+' | User messages: '+users.length;}
+function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+isGenerating()+' | Voice: '+(voiceEnabled?'on':'muted')+' | Current face: '+names[mood]+' | User messages: '+users.length;}
 debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
 // No network requests, no model calls. Stop scanning when the tab is hidden.
@@ -161,7 +197,7 @@ function tick(){
  if(document.hidden)return;
  detect();
  if(diagnostic.style.display==='block')refreshDiagnostics();
- if(mood!==0&&Date.now()>until)setMood(0);
+ if(mood!==0&&Date.now()>until&&!isGenerating())setMood(0);
 }
 setMood(0);
 let poll=null;
