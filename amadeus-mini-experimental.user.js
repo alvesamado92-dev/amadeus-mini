@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.4.9
+// @version      0.5.0
 // @description  Cleaner avatar controls and compliment-aware reactions; no AI calls
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -18,11 +18,11 @@ const sprites=['data:image/webp;base64,UklGRgYQAABXRUJQVlA4IPoPAAAwTQCdASrAAMAAP
 const panel=document.createElement('aside');panel.id='amadeus-mini';
 Object.assign(panel.style,{position:'fixed',right:'12px',bottom:'100px',zIndex:'2147483647',width:'110px',padding:'3px',background:'transparent',color:'white',border:'0',borderRadius:'12px',textAlign:'center',font:'12px sans-serif',touchAction:'none',userSelect:'none',boxShadow:'none'});
 const portrait=document.createElement('img');portrait.alt='Kurisu Amadeus portrait';portrait.draggable=false;portrait.decoding='async';portrait.style.cssText='width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;transition:opacity .18s ease';
-const label=document.createElement('div');label.textContent='AMADEUS';label.style.marginTop='5px';label.hidden=true;
+
 function button(t,title){const b=document.createElement('button');b.textContent=t;b.title=title;b.style.cssText='border:0;border-radius:6px;background:#53647e;color:white;padding:5px 9px;margin-top:5px;cursor:pointer';return b}
 const cycle=button('↻','Cycle expressions'),collapse=button('−','Minimize'),debug=button('?','Detection diagnostics');
 const diagnostic=document.createElement('div');diagnostic.style.cssText='display:none;font-size:10px;overflow-wrap:anywhere;text-align:left;margin-top:6px;max-height:120px;overflow:auto';
-diagnostic.setAttribute('aria-live','polite');panel.append(portrait,label,cycle,collapse,debug,diagnostic);document.body.append(panel);
+diagnostic.setAttribute('aria-live','polite');panel.append(portrait,cycle,collapse,debug,diagnostic);document.body.append(panel);
 let controlsTimer=null,controlsVisible=false;
 function showControls(show){
  controlsVisible=show;
@@ -30,8 +30,9 @@ function showControls(show){
  if(!show)diagnostic.style.display='none';
 }
 function revealControls(){showControls(true);if(controlsTimer)clearTimeout(controlsTimer);controlsTimer=setTimeout(()=>{if(!minimized)showControls(false)},4500)}
+function toggleControls(){if(controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}if(controlsVisible){showControls(false)}else{revealControls()}}
 showControls(false);
-portrait.addEventListener('click',revealControls);
+portrait.addEventListener('click',toggleControls);
 panel.addEventListener('mouseenter',()=>{if(matchMedia('(hover:hover)').matches)revealControls()});
 panel.addEventListener('mouseleave',()=>{if(matchMedia('(hover:hover)').matches&&!minimized)showControls(false)});
 
@@ -62,7 +63,7 @@ function setMood(i){
 }
 function react(i){if(i!==mood)voiceReaction(names[i]);setMood(i);until=Date.now()+HOLD_MS}
 cycle.addEventListener('click',()=>react((mood+1)%names.length));
-collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=label.hidden=cycle.hidden=debug.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';showControls(true)});
+collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=cycle.hidden=debug.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';showControls(true)});
 panel.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;const r=panel.getBoundingClientRect();drag={x:e.clientX,y:e.clientY,left:r.left,top:r.top};panel.setPointerCapture(e.pointerId)});
 panel.addEventListener('pointermove',e=>{if(!drag)return;panel.style.left=Math.max(0,Math.min(innerWidth-panel.offsetWidth,drag.left+e.clientX-drag.x))+'px';panel.style.top=Math.max(0,Math.min(innerHeight-panel.offsetHeight,drag.top+e.clientY-drag.y))+'px';panel.style.right='auto';panel.style.bottom='auto'});
 panel.addEventListener('pointerup',()=>drag=null);panel.addEventListener('pointercancel',()=>drag=null);panel.addEventListener('lostpointercapture',()=>drag=null);
@@ -126,7 +127,7 @@ function detect(){
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
 function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Current face: '+names[mood]+' | User messages: '+users.length;}
-debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'block';});
+debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';});
 
 // No network requests, no model calls. Stop scanning when the tab is hidden.
 function tick(){
