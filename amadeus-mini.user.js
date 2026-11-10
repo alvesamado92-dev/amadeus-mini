@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.3.7
+// @version      0.3.8
 // @description  Lightweight cross-platform Amadeus avatar
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -99,6 +99,9 @@
     return out;
   }
   let lastSignature = '';
+  let moodUntil = 0;
+  const HOLD_MS = 25000;
+  function react(i) { setMood(i); moodUntil = Date.now() + HOLD_MS; }
   function detect() {
     const messages = readMessages();
     const users = messages.filter(m => m.role === 'user');
@@ -113,16 +116,21 @@
     const signature = last + '|' + assistant.slice(-500);
     if (signature === lastSignature) return;
     lastSignature = signature;
-    if (/christina|idiot|pervert|curriculum.*fake|middle school degree/.test(last)) setMood(3);
-    else if (/embarrass|blush|w-what/.test(assistant)) setMood(4);
-    else if (/success|excellent|great news|worked/.test(assistant)) setMood(2);
-    else if (/surpris|unexpected/.test(assistant)) setMood(5);
-    else if (/analy|research|calculat|hypothes|investigat/.test(assistant)) setMood(1);
-    else setMood(0);
+    // User-triggered expressions take priority. Ordinary messages do not
+    // instantly erase the current expression.
+    if (/christina|idiot|pervert|curriculum.*fake|middle school degree/.test(last)) react(3);
+    else if (/thank|congratulat|well done|good job|great work/.test(last)) react(2);
+    else if (/surpris|no way|what\?!/.test(last)) react(5);
+    else if (/embarrass|blush|fluster/.test(last)) react(4);
+    else if (/analy|research|calculat|hypothes|investigat/.test(last)) react(1);
+    else if (/embarrass|blush|w-what/.test(assistant)) react(4);
+    else if (/success|excellent|great news|worked/.test(assistant)) react(2);
+    else if (/surpris|unexpected/.test(assistant)) react(5);
+    else if (/analy|research|calculat|hypothes|investigat/.test(assistant)) react(1);
   }
   // Low-frequency polling avoids missed updates on ChatGPT's dynamic mobile UI.
   // It also avoids the MutationObserver reacting to its own avatar updates.
   setMood(0);
   detect();
-  setInterval(detect, 1500);
+  setInterval(()=>{ detect(); if(mood!==0 && Date.now()>moodUntil) setMood(0); }, 1500);
 })();
