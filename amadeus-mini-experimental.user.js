@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.7.0
-// @description  Independent contextual voice reactions, IndexedDB audio library, manual previews
+// @version      0.7.1
+// @description  Independent voice tags, IndexedDB, bulk audio import and previews
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
 // @grant        none
@@ -47,7 +47,7 @@ const HOLD_MS=25000, CHECK_MS=350;
 // User-supplied clips stay in this browser's local storage; nothing is uploaded.
 const VOICE_LIBRARY='amadeus-mini-voice-library-v1';
 const VOICE_DB='amadeus-mini-audio-v2';
-const VOICE_TAGS=['surprise','teasing','agreement','attention','hesitation','curiosity','celebration','other'];
+const VOICE_TAGS=['surprise','teasing','strong_annoyance','agreement','attention','hesitation','curiosity','celebration','other'];
 let voiceEnabled=false,playing=null,voiceStatus='initializing',voiceClips=[],voiceLastAt=0,voiceHistory=[],voiceLastId='',voiceLastTag='',voiceLastClipAt=0;
 let manualUntil=0;
 const dbPromise=new Promise((resolve,reject)=>{
@@ -81,7 +81,8 @@ async function removeClip(id){
 }
 function suggestedTag(label){
  const t=label.toLowerCase();
- if(/0030|baka|idiot|hentai/.test(t))return 'teasing';
+ if(/0030/.test(t)&&!/baka[_ -]?only|baka[_ -]?verified|short[_ -]?baka/.test(t))return 'strong_annoyance';
+ if(/baka|idiot/.test(t))return 'teasing';
  if(/0041|0019|0036|surpris|huh|kya/.test(t))return 'surprise';
  if(/0058|wakatta|agree|sodesu/.test(t))return 'agreement';
  if(/0001|0002|0034|moshi/.test(t))return 'attention';
@@ -183,21 +184,24 @@ testAudio.addEventListener('click',async()=>{
  refreshDiagnostics();
 });
 upload.title='Import a voice line independently of facial expressions (stored in IndexedDB)';
+upload.title='Import one or multiple audio recordings into IndexedDB; filenames determine reaction tags';
+picker.multiple=true;
 upload.addEventListener('click',()=>picker.click());
 picker.addEventListener('change',async()=>{
- const file=picker.files?.[0];picker.value='';
- if(!file)return;
- if(!file.type.startsWith('audio/')&&!/\.(wav|mp3|ogg|m4a|webm)$/i.test(file.name)){alert('Choose an audio file.');return;}
- const suggested=suggestedTag(file.name);
- const tag=prompt('Choose a voice reaction tag (independent of expression):\n'+VOICE_TAGS.join(', '),suggested);
- if(tag===null)return;
- const normalizedTag=tag.trim().toLowerCase();
- if(!VOICE_TAGS.includes(normalizedTag)){alert('Invalid tag. Choose one from the list.');return;}
+ const files=Array.from(picker.files||[]);picker.value='';
+ if(!files.length)return;
+ const valid=files.filter(file=>file.type.startsWith('audio/')||/\\.(wav|mp3|ogg|m4a|webm)$/i.test(file.name));
+ if(!valid.length){alert('Choose WAV, MP3, OGG, M4A or WebM audio files.');return;}
+ let imported=0;
  try{
-  await storeClip({id:'clip-'+Date.now()+'-'+Math.random().toString(36).slice(2,8),label:file.name,tag:normalizedTag,blob:file});
-  await reloadVoice();voiceStatus='imported '+file.name+' ['+normalizedTag+']';
-  alert('Imported '+file.name+' as '+normalizedTag+'. Use ▶ to test playback.');
- }catch(e){voiceStatus='import failed: '+(e?.name||e?.message||'unknown');alert(voiceStatus);}
+  for(const file of valid){
+   const tag=suggestedTag(file.name);
+   await storeClip({id:'clip-'+Date.now()+'-'+imported+'-'+Math.random().toString(36).slice(2,8),label:file.name,tag,blob:file});
+   imported++;
+  }
+  await reloadVoice();voiceStatus='bulk imported '+imported+' clip(s)';
+  alert('Imported '+imported+' audio file(s) using filename-based reaction tags. Use ▶ to preview.');
+ }catch(e){voiceStatus='import failed after '+imported+' clip(s): '+(e?.name||e?.message||'unknown');alert(voiceStatus);}
 });
 let transitionTimer=null;
 const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches||false;
