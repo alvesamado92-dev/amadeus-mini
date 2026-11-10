@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.5.4
-// @description  Generation-aware thinking portrait and opt-in local voice clips; no AI calls
+// @version      0.5.5
+// @description  Improved generation detection with diagnostics and optional local voice clips
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
 // @grant        none
@@ -40,8 +40,8 @@ panel.addEventListener('mouseleave',()=>{if(matchMedia('(hover:hover)').matches&
 let mood=-1, minimized=false, active=true, drag=null, until=0, signature='', lastPath=location.pathname;
 let assistantSignature='', assistantStable=0, userReactedAt=0, assistantBaseline='', assistantHandled=false;
 let stage='waiting', selected='none', source='none', responseLength=0, stableCount=0;
-let generating=false, thinkingStarted=0;
-const HOLD_MS=25000, CHECK_MS=800;
+let generating=false, thinkingStarted=0, generationSignal='none';
+const HOLD_MS=25000, CHECK_MS=350;
 // User-supplied clips stay in this browser's local storage; nothing is uploaded.
 const VOICE_PREFIX='amadeus-mini-voice-';
 let voiceEnabled=false,lastVoiceAt=0,playing=null;
@@ -144,8 +144,21 @@ function assistantEmotion(t){
  return -1;
 }
 function isGenerating(){
- // ChatGPT exposes a stop-generation control while an answer is streaming.
- return !!document.querySelector('button[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"],button[aria-label="Parar geração"],button[aria-label="Interromper geração"]');
+ // Use several independent UI signals; ChatGPT frequently changes button markup.
+ const controls=[...document.querySelectorAll('button,[role="button"]')];
+ const stop=controls.find(el=>{
+  const hint=[el.getAttribute('data-testid'),el.getAttribute('aria-label'),el.getAttribute('title')].filter(Boolean).join(' ').toLowerCase();
+  return /stop-button|stop generating|stop response|stop streaming|parar gera|interromper gera|interromper resposta|detener generaci|arrêter la génération/.test(hint);
+ });
+ if(stop){generationSignal='stop control';return true;}
+ const busy=document.querySelector('main [aria-busy="true"],[data-testid="conversation-turn"][aria-busy="true"]');
+ if(busy){generationSignal='aria busy';return true;}
+ const streaming=document.querySelector('main [data-is-streaming="true"],main [data-streaming="true"],main [data-state="streaming"]');
+ if(streaming){generationSignal='streaming attribute';return true;}
+ // The composer may show a stop icon with no accessible label.
+ const icon=controls.find(el=>el.querySelector('svg rect') && /stop|generat|parar|interromp/i.test((el.outerHTML||'').slice(0,600)));
+ if(icon){generationSignal='stop icon';return true;}
+ generationSignal='none';return false;
 }
 function detect(){
  if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;generating=false;setMood(0);}
@@ -161,7 +174,7 @@ function detect(){
    // Do not classify a partial response as a completed assistant turn.
    if(isGenerating()){
      if(!generating){generating=true;thinkingStarted=Date.now();}
-     if(Date.now()-thinkingStarted>=500){setMood(1);until=Date.now()+HOLD_MS;}
+     setMood(1);until=Date.now()+HOLD_MS;
      stage='generating';return;
    }
    if(generating){generating=false;assistantSignature='';assistantStable=0;userReactedAt=Math.min(userReactedAt,Date.now()-3500);}
@@ -189,7 +202,7 @@ function detect(){
  // Assistant text is intentionally not used here: streaming it could repeatedly
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
-function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+isGenerating()+' | Voice: '+(voiceEnabled?'on':'muted')+' | Current face: '+names[mood]+' | User messages: '+users.length;}
+function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+isGenerating()+' ('+generationSignal+') | Voice: '+(voiceEnabled?'on':'muted')+' | Current face: '+names[mood]+' | User messages: '+users.length;}
 debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
 // No network requests, no model calls. Stop scanning when the tab is hidden.
