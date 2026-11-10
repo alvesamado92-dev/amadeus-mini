@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.5.5
-// @description  Improved generation detection with diagnostics and optional local voice clips
+// @version      0.5.6
+// @description  Response-growth thinking detection with diagnostic telemetry and local voice clips
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
 // @grant        none
@@ -41,6 +41,7 @@ let mood=-1, minimized=false, active=true, drag=null, until=0, signature='', las
 let assistantSignature='', assistantStable=0, userReactedAt=0, assistantBaseline='', assistantHandled=false;
 let stage='waiting', selected='none', source='none', responseLength=0, stableCount=0;
 let generating=false, thinkingStarted=0, generationSignal='none';
+let observedResponse='',lastResponseChange=0, responseGrowths=0, lastGrowthAt=0;
 const HOLD_MS=25000, CHECK_MS=350;
 // User-supplied clips stay in this browser's local storage; nothing is uploaded.
 const VOICE_PREFIX='amadeus-mini-voice-';
@@ -161,7 +162,7 @@ function isGenerating(){
  generationSignal='none';return false;
 }
 function detect(){
- if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;generating=false;setMood(0);}
+ if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;generating=false;observedResponse='';responseGrowths=0;lastGrowthAt=0;setMood(0);}
  const messages=readMessages(),users=messages.filter(m=>m.role==='user'),last=users.at(-1)?.content||'';
  const cmd=[...users].reverse().map(m=>m.content).find(t=>/\bamadeus\s+(on|off)\b/.test(t));if(cmd)active=!/\bamadeus\s+off\b/.test(cmd);
  panel.style.display=active?'':'none';if(!active)return;
@@ -170,18 +171,30 @@ function detect(){
  // Otherwise a single 'Christina' keeps restarting the 25-second timer.
  const next=location.pathname+'|'+users.length+'|'+last;
  if(next===signature){
-   // While the response is actively generating, use the thinking portrait.
-   // Do not classify a partial response as a completed assistant turn.
-   if(isGenerating()){
-     if(!generating){generating=true;thinkingStarted=Date.now();}
-     setMood(1);until=Date.now()+HOLD_MS;
+   // Observe the assistant response directly. This works even if ChatGPT's
+   // stop control has no recognizable HTML attributes.
+   const now=Date.now(),response=latestAssistantText();
+   responseLength=response.length;
+   if(response!==observedResponse){
+     const grew=response.length>observedResponse.length && response!==assistantBaseline;
+     if(grew && now-userReactedAt<120000){responseGrowths++;lastGrowthAt=now;}
+     observedResponse=response;lastResponseChange=now;
+     assistantSignature='';assistantStable=0;
+   }
+   const uiGenerating=isGenerating();
+   const growing=responseGrowths>0 && now-lastGrowthAt<1700;
+   if(uiGenerating||growing){
+     if(!generating){generating=true;thinkingStarted=now;}
+     generationSignal=uiGenerating?generationSignal:'response growth';
+     setMood(1);until=now+HOLD_MS;
      stage='generating';return;
    }
-   if(generating){generating=false;assistantSignature='';assistantStable=0;userReactedAt=Math.min(userReactedAt,Date.now()-3500);}
+   if(generating){generating=false;assistantSignature='';assistantStable=0;userReactedAt=Math.min(userReactedAt,now-3500);}
+   // Wait until response text has stopped changing before classifying.
+   if(responseGrowths>0 && now-lastResponseChange<1700){stage='waiting for stable response';return;}
    // Second phase: react to a completed assistant turn, only when the page
    // exposes a trustworthy assistant role. Never classify the user fallback.
    if(assistantHandled)return;
-   const response=latestAssistantText();responseLength=response.length;
    const key=location.pathname+'|'+response;
    if(!response){stage='no assistant text';return;}
    if(response===assistantBaseline){stage='same as baseline';return;}
@@ -196,13 +209,13 @@ function detect(){
    else stage=match<0?'no matching emotion':'same expression';
    return;
  }
- signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();assistantHandled=false;generating=false;userReactedAt=Date.now();stage='user detected';selected='pending';responseLength=0;
+ signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();observedResponse=assistantBaseline;lastResponseChange=Date.now();responseGrowths=0;lastGrowthAt=0;assistantHandled=false;generating=false;userReactedAt=Date.now();stage='user detected';selected='pending';responseLength=0;
  const userMatch=userEmotion(last);
  if(userMatch>=0)react(userMatch);
  // Assistant text is intentionally not used here: streaming it could repeatedly
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
-function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+isGenerating()+' ('+generationSignal+') | Voice: '+(voiceEnabled?'on':'muted')+' | Current face: '+names[mood]+' | User messages: '+users.length;}
+function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' ('+(generating&&generationSignal==='none'?'response growth':generationSignal)+') | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' | Current face: '+names[mood]+' | User messages: '+users.length;}
 debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
 // No network requests, no model calls. Stop scanning when the tab is hidden.
