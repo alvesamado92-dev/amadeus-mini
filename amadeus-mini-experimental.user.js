@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.5.8
+// @version      0.5.9
 // @description  Adaptive voice cooldown, multiple clips per expression, selective reactions
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -112,7 +112,7 @@ upload.addEventListener('click',()=>picker.click());
 picker.addEventListener('change',()=>{
  const file=picker.files?.[0];picker.value='';
  if(!file||!file.type.startsWith('audio/'))return;
- if(file.size>350000){alert('Use a short audio clip under 350 KB.');return;}
+ if(file.size>500000){alert('Use a short audio clip under 500 KB.');return;}
  const moodName=names[mood],reader=new FileReader();
  reader.onload=()=>{
   try{
