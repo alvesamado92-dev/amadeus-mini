@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.3.4
+// @version      0.3.5
 // @description  Lightweight cross-platform Amadeus avatar
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -37,7 +37,16 @@
     const messages=readMessages();
     const users=messages.filter(m=>m.role==='user');
     const last=users.at(-1)?.content||'';
-    diagnostic.textContent='User messages: '+users.length+' | Last: '+(last.slice(0,100)||'[none]')+' | Christina detected: '+(/christina/.test(last)?'YES':'NO')+' | Turn containers: '+document.querySelectorAll('[data-testid^="conversation-turn-"],[data-turn-id]').length+' | Text blocks: '+document.querySelectorAll('main .whitespace-pre-wrap').length;
+    const probes=['[data-message-author-role]','[data-testid^="conversation-turn-"]','[data-turn-id]','main','article','.whitespace-pre-wrap','[data-testid]'];
+    const counts=probes.map(q=>q+':'+document.querySelectorAll(q).length).join(' | ');
+    const main=document.querySelector('main');
+    const samples=[...(main||document.body).querySelectorAll('*')].filter(el=>el.children.length===0 && /christina/i.test((el.textContent||'').trim())).slice(-3).map(el=>{
+      const ancestors=[];let p=el;
+      for(let i=0;p&&i<4;i++,p=p.parentElement)ancestors.push(p.tagName.toLowerCase()+(p.id?'#'+p.id:'')+(p.getAttribute('data-testid')?'[testid='+p.getAttribute('data-testid')+']':'')+(p.getAttribute('data-message-author-role')?'[role='+p.getAttribute('data-message-author-role')+']':'')+(typeof p.className==='string'&&p.className?' .'+p.className.split(/\\s+/).slice(0,2).join('.'):''));
+      return ancestors.join(' > ');
+    });
+    diagnostic.textContent='User messages: '+users.length+' | Last: '+(last.slice(0,80)||'[none]')+' | Christina detected: '+(/christina/.test(last)?'YES':'NO')+' | '+counts+' | Matching elements: '+(samples.join(' || ')||'[none]');
+    diagnostic.style.maxHeight='220px';
     diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';
   });
   let mood=-1, minimized=false, active=true, drag=null;
