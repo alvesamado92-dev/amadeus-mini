@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.5.7
-// @description  Early thinking state, gradual response expressions, selective voice reactions
+// @version      0.5.8
+// @description  Adaptive voice cooldown, multiple clips per expression, selective reactions
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
 // @grant        none
@@ -46,22 +46,68 @@ let earlyThinkingAt=0,midAnswerEmotion=-1,midAnswerAt=0;
 const HOLD_MS=25000, CHECK_MS=350;
 // User-supplied clips stay in this browser's local storage; nothing is uploaded.
 const VOICE_PREFIX='amadeus-mini-voice-';
-let voiceEnabled=false,lastVoiceAt=0,playing=null;
-function voiceReaction(name,preview=false){
- if(!voiceEnabled || document.hidden || (!preview&&Date.now()-lastVoiceAt<12000))return;
- let url=null;try{url=localStorage.getItem(VOICE_PREFIX+name)}catch(e){}
- if(!url)return;
- lastVoiceAt=Date.now();
- if(playing){playing.pause();playing=null;}
- const audio=new Audio(url);audio.volume=0.5;playing=audio;
- audio.play().catch(()=>{});audio.addEventListener('ended',()=>{if(playing===audio)playing=null},{once:true});
+const VOICE_LIBRARY='amadeus-mini-voice-library-v1';
+let voiceEnabled=false,lastVoiceAt=0,playing=null,lastVoiceKey='',lastVoiceKeyAt=0;
+let voiceHistory=[],voiceCursor={};
+function voiceClips(name){
+ let list=[];
+ try{const stored=JSON.parse(localStorage.getItem(VOICE_LIBRARY)||'{}');list=Array.isArray(stored[name])?stored[name]:[];}catch(e){}
+ // Keep clips imported in previous versions.
+ try{const legacy=localStorage.getItem(VOICE_PREFIX+name);if(legacy&&!list.some(c=>c.url===legacy))list.unshift({id:'legacy',label:'Previous '+name+' clip',url:legacy});}catch(e){}
+ return list.filter(c=>c&&typeof c.url==='string'&&c.url.startsWith('data:audio/'));
+}
+function chooseClip(name,context){
+ const clips=voiceClips(name);if(!clips.length)return null;
+ const t=normalized(context||'');
+ const score=c=>{
+  const label=normalized(c.label||'');
+  const terms={
+   annoyed:/baka|idiot|pervert|hentai|teas|insult/,
+   surprised:/surpris|shock|huh|eh|kya|gasp/,
+   embarrassed:/shy|blush|ano|chotto|fluster/,
+   happy:/agree|wakatta|understood|sodesu|sou desu|great|happy/
+  };
+  let n=0;
+  if(terms[name]?.test(label))n+=2;
+  if(/\b(agree|understand|got it|correct|yes|indeed|right)\b/.test(t)&&/agree|wakatta|sodesu|sou desu/.test(label))n+=4;
+  if(/\b(baka|idiot|pervert|hentai)\b/.test(t)&&/baka|idiot|pervert|hentai/.test(label))n+=4;
+  if(/\b(surprise|shocked|what|unexpected)\b/.test(t)&&/surpris|huh|eh|kya/.test(label))n+=4;
+  return n;
+ };
+ const max=Math.max(...clips.map(score));
+ const candidates=clips.filter(c=>score(c)===max);
+ const idx=(voiceCursor[name]||0)%candidates.length;voiceCursor[name]=(voiceCursor[name]||0)+1;
+ return candidates[idx];
+}
+function voiceReaction(name,preview=false,context=''){
+ if(!voiceEnabled||document.hidden)return;
+ const now=Date.now();
+ if(!preview){
+  voiceHistory=voiceHistory.filter(t=>now-t<60000);
+  if(voiceHistory.length>=3||now-lastVoiceAt<3000)return;
+  // An ordinary reaction gets a 9-second gap; an emotionally distinct
+  // follow-up can play after 3 seconds.
+  if(now-lastVoiceAt<9000&&name===lastVoiceKey)return;
+ }
+ const clip=chooseClip(name,context);if(!clip)return;
+ if(!preview&&clip.id===lastVoiceKey&&now-lastVoiceKeyAt<20000)return;
+ // Never interrupt a currently playing voice clip.
+ if(playing&&!playing.paused&&!playing.ended)return;
+ const audio=new Audio(clip.url);audio.volume=0.5;
+ playing=audio;
+ audio.addEventListener('ended',()=>{if(playing===audio)playing=null},{once:true});
+ audio.addEventListener('error',()=>{if(playing===audio)playing=null},{once:true});
+ audio.play().then(()=>{
+  if(!preview){lastVoiceAt=now;voiceHistory.push(now);lastVoiceKey=clip.id;lastVoiceKeyAt=now;}
+ }).catch(()=>{if(playing===audio)playing=null});
 }
 voice.addEventListener('click',()=>{
  voiceEnabled=!voiceEnabled;voice.textContent=voiceEnabled?'♪':'♪×';
  voice.title=voiceEnabled?'Voice enabled; click to mute':'Voice muted; click to enable';
  if(!voiceEnabled&&playing){playing.pause();playing=null;}
- if(voiceEnabled)voiceReaction(names[mood],true);
+ // Do not automatically play audio merely because the user unmuted.
 });
+upload.title='Add a short audio clip for the current expression (multiple allowed)';
 upload.addEventListener('click',()=>picker.click());
 picker.addEventListener('change',()=>{
  const file=picker.files?.[0];picker.value='';
@@ -69,8 +115,15 @@ picker.addEventListener('change',()=>{
  if(file.size>350000){alert('Use a short audio clip under 350 KB.');return;}
  const moodName=names[mood],reader=new FileReader();
  reader.onload=()=>{
-  try{localStorage.setItem(VOICE_PREFIX+moodName,String(reader.result));upload.title='Saved '+moodName+' clip locally';if(voiceEnabled)voiceReaction(moodName,true);}
-  catch(e){alert('Could not save clip in browser storage. Try a smaller audio file.');}
+  try{
+   const stored=JSON.parse(localStorage.getItem(VOICE_LIBRARY)||'{}');
+   const list=Array.isArray(stored[moodName])?stored[moodName]:[];
+   const id='clip-'+Date.now()+'-'+list.length;
+   list.push({id,label:file.name,url:String(reader.result)});
+   stored[moodName]=list;localStorage.setItem(VOICE_LIBRARY,JSON.stringify(stored));
+   upload.title='Saved '+list.length+' '+moodName+' clip(s) locally. Click to add another.';
+   if(voiceEnabled)voiceReaction(moodName,true,file.name);
+  }catch(e){alert('Could not save clip in browser storage. Try a smaller audio file.');}
  };
  reader.readAsDataURL(file);
 });
@@ -87,7 +140,7 @@ function setMood(i){
  portrait.style.opacity='0.3';
  transitionTimer=setTimeout(()=>{portrait.src=sprites[i];portrait.style.opacity='1';transitionTimer=null},110);
 }
-function react(i,audible=false){if(audible&&i!==1&&i!==0&&i!==mood)voiceReaction(names[i]);setMood(i);until=Date.now()+HOLD_MS}
+function react(i,audible=false,context=''){if(audible&&i!==1&&i!==0)voiceReaction(names[i],false,context);setMood(i);until=Date.now()+HOLD_MS}
 cycle.addEventListener('click',()=>react((mood+1)%names.length));
 collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=cycle.hidden=debug.hidden=voice.hidden=upload.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';showControls(true)});
 panel.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;const r=panel.getBoundingClientRect();drag={x:e.clientX,y:e.clientY,left:r.left,top:r.top};panel.setPointerCapture(e.pointerId)});
@@ -216,7 +269,7 @@ function detect(){
    assistantHandled=true;stage='classified';
    const match=assistantEmotion(response);
    selected=match<0?'no emotion':names[match];
-   if(match>=0 && match!==mood){react(match,true);stage='applied '+selected;}
+   if(match>=0){react(match,true,response);stage='applied '+selected;}
    else stage=match<0?'no matching emotion':'same expression';
    return;
  }
@@ -226,7 +279,7 @@ function detect(){
  // Assistant text is intentionally not used here: streaming it could repeatedly
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
-function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' ('+(generating&&generationSignal==='none'?'response growth':generationSignal)+') | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' | Current face: '+names[mood]+' | User messages: '+users.length;}
+function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' ('+(generating&&generationSignal==='none'?'response growth':generationSignal)+') | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' ('+voiceClips(names[mood]).length+' clips)'+' | Current face: '+names[mood]+' | User messages: '+users.length;}
 debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
 // No network requests, no model calls. Stop scanning when the tab is hidden.
