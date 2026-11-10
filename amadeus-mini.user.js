@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.3.1
+// @version      0.3.2
 // @description  Lightweight cross-platform Amadeus avatar
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -37,25 +37,48 @@
   panel.addEventListener('pointermove',e=>{if(!drag)return;panel.style.left=Math.max(0,Math.min(innerWidth-panel.offsetWidth,drag.left+e.clientX-drag.x))+'px';panel.style.top=Math.max(0,Math.min(innerHeight-panel.offsetHeight,drag.top+e.clientY-drag.y))+'px';panel.style.right='auto';panel.style.bottom='auto';});
   panel.addEventListener('pointerup',()=>drag=null);
   panel.addEventListener('pointercancel',()=>drag=null);
-  let lastSignature='', timer;
-  function detect(){
-    const messages=[...document.querySelectorAll('[data-message-author-role]')];
-    const user=messages.filter(x=>x.getAttribute('data-message-author-role')==='user');
-    const last=user.at(-1)?.textContent?.toLowerCase()||'';
-    const modeCommand=[...user].reverse().map(x=>x.textContent?.toLowerCase()||'').find(x=>/\bamadeus\s+(on|off)\b/.test(x));
-    if(modeCommand)active=!/\bamadeus\s+off\b/.test(modeCommand);
-    panel.style.display=active?'':'none'; if(!active)return;
-    const assistant=messages.filter(x=>x.getAttribute('data-message-author-role')==='assistant').at(-1)?.textContent?.toLowerCase()||'';
-    const signature=last+'|'+assistant.slice(-400);
-    if(signature===lastSignature)return;lastSignature=signature;
-    if(/christina|idiot|pervert/.test(last))setMood(2);
-    else if(/embarrass|blush|w-what/.test(assistant))setMood(3);
-    else if(/success|excellent|great news|worked/.test(assistant))setMood(4);
-    else if(/surpris|unexpected/.test(assistant))setMood(5);
-    else if(/analy|research|calculat|hypothes|investigat/.test(assistant))setMood(1);
+  // Read rendered messages, not the floating widget itself.
+  // ChatGPT's DOM can vary across desktop and mobile releases.
+  function readMessages() {
+    const nodes = [...document.querySelectorAll('[data-message-author-role], [data-testid^="conversation-turn-"]')];
+    const out = [];
+    for (const el of nodes) {
+      if (el.matches('[data-testid^="conversation-turn-"]') &&
+          el.querySelector('[data-message-author-role]')) continue;
+      const role = el.getAttribute('data-message-author-role') ||
+        (el.querySelector('[data-message-author-role]')?.getAttribute('data-message-author-role')) ||
+        (/user/i.test(el.getAttribute('data-testid') || '') ? 'user' : '');
+      if (role !== 'user' && role !== 'assistant') continue;
+      const content = (el.innerText || el.textContent || '').trim().toLowerCase();
+      if (content) out.push({role, content});
+    }
+    return out;
+  }
+  let lastSignature = '';
+  function detect() {
+    const messages = readMessages();
+    const users = messages.filter(m => m.role === 'user');
+    const last = users.at(-1)?.content || '';
+    const latestCommand = [...users].reverse()
+      .map(m => m.content)
+      .find(t => /\bamadeus\s+(on|off)\b/.test(t));
+    if (latestCommand) active = !/\bamadeus\s+off\b/.test(latestCommand);
+    panel.style.display = active ? '' : 'none';
+    if (!active) return;
+    const assistant = messages.filter(m => m.role === 'assistant').at(-1)?.content || '';
+    const signature = last + '|' + assistant.slice(-500);
+    if (signature === lastSignature) return;
+    lastSignature = signature;
+    if (/christina|idiot|pervert/.test(last)) setMood(3);
+    else if (/embarrass|blush|w-what/.test(assistant)) setMood(4);
+    else if (/success|excellent|great news|worked/.test(assistant)) setMood(2);
+    else if (/surpris|unexpected/.test(assistant)) setMood(5);
+    else if (/analy|research|calculat|hypothes|investigat/.test(assistant)) setMood(1);
     else setMood(0);
   }
+  // Low-frequency polling avoids missed updates on ChatGPT's dynamic mobile UI.
+  // It also avoids the MutationObserver reacting to its own avatar updates.
   setMood(0);
-  new MutationObserver(()=>{clearTimeout(timer);timer=setTimeout(detect,650);}).observe(document.body,{childList:true,subtree:true,characterData:true});
   detect();
+  setInterval(detect, 1500);
 })();
