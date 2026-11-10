@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.8.0
+// @version      0.8.1
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -23,14 +23,14 @@ Object.assign(panel.style,{position:'fixed',right:'12px',bottom:'100px',zIndex:'
 const portrait=document.createElement('img');portrait.alt='Kurisu Amadeus portrait';portrait.draggable=false;portrait.decoding='async';portrait.style.cssText='width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:block;transition:opacity .18s ease';
 
 function button(t,title){const b=document.createElement('button');b.textContent=t;b.title=title;b.style.cssText='border:0;border-radius:6px;background:#53647e;color:white;padding:5px 9px;margin-top:5px;cursor:pointer';return b}
-const cycle=button('↻','Cycle expressions'),collapse=button('−','Minimize'),debug=button('?','Detection diagnostics'),voice=button('♪×','Voice muted; click to enable'),upload=button('♫+','Import an audio clip for the current expression'),testAudio=button('▶','Play a test clip'),syncVoice=button('⇣','Synchronize private GitHub voice library');
+const cycle=button('↻','Cycle expressions'),collapse=button('−','Minimize'),debug=button('?','Detection diagnostics'),voice=button('♪×','Voice muted; click to enable'),upload=button('♫+','Import an audio clip for the current expression'),testAudio=button('▶','Play a test clip'),syncVoice=button('⇣','Synchronize private GitHub voice library'),deleteVoice=button('🗑','Delete an individual locally stored audio clip');
 const picker=document.createElement('input');picker.type='file';picker.accept='audio/*';picker.hidden=true;
 const diagnostic=document.createElement('div');diagnostic.style.cssText='display:none;position:absolute;right:110px;top:0;width:260px;max-width:calc(100vw - 130px);padding:12px;border-radius:10px;background:#202332;color:#fff;font-size:12px;line-height:1.5;overflow-wrap:anywhere;text-align:left;max-height:240px;overflow:auto;box-shadow:0 4px 18px #0007';
-diagnostic.setAttribute('aria-live','polite');panel.append(portrait,cycle,collapse,debug,voice,upload,testAudio,syncVoice,picker,diagnostic);document.body.append(panel);
+diagnostic.setAttribute('aria-live','polite');panel.append(portrait,cycle,collapse,debug,voice,upload,testAudio,syncVoice,deleteVoice,picker,diagnostic);document.body.append(panel);
 let controlsTimer=null,controlsVisible=false;
 function showControls(show){
  controlsVisible=show;
- for(const b of [cycle,collapse,debug,voice,upload,testAudio,syncVoice]){b.style.opacity=show?'1':'0';b.style.pointerEvents=show?'auto':'none';}
+ for(const b of [cycle,collapse,debug,voice,upload,testAudio,syncVoice,deleteVoice]){b.style.opacity=show?'1':'0';b.style.pointerEvents=show?'auto':'none';}
  if(!show && diagnostic.style.display!=='block')diagnostic.style.display='none';
 }
 function revealControls(){showControls(true);if(controlsTimer)clearTimeout(controlsTimer);controlsTimer=setTimeout(()=>{if(!minimized && diagnostic.style.display!=='block')showControls(false)},4500)}
@@ -248,6 +248,19 @@ testAudio.addEventListener('click',async()=>{
  await playClip(voiceClips[index],true);
  refreshDiagnostics();
 });
+deleteVoice.addEventListener('click',async()=>{
+ await reloadVoice();
+ if(!voiceClips.length){alert('There are no locally stored clips to delete.');return;}
+ const menu=voiceClips.map((c,i)=>(i+1)+'. '+c.label+' ['+c.tag+']'+(c.source==='private-github'?' (synced)':'')).join('\\n');
+ const choice=prompt('Delete one local clip (number):\\n'+menu,'');
+ if(choice===null||!choice.trim())return;
+ const index=Number(choice)-1;
+ if(!Number.isInteger(index)||index<0||index>=voiceClips.length){alert('Invalid clip number');return;}
+ const clip=voiceClips[index];
+ if(!confirm('Permanently remove this local clip?\\n'+clip.label+' ['+clip.tag+']'+(clip.source==='private-github'?'\\nIt may return during the next GitHub synchronization.':'')))return;
+ try{if(playing)stopVoice();await removeClip(clip.id);await reloadVoice();voiceStatus='deleted '+clip.label;alert('Deleted local recording: '+clip.label);}
+ catch(e){voiceStatus='delete failed: '+(e?.message||'unknown');alert(voiceStatus);}
+});
 upload.title='Import a voice line independently of facial expressions (stored in IndexedDB)';
 upload.title='Import one or multiple audio recordings into IndexedDB; filenames determine reaction tags';
 picker.multiple=true;
@@ -283,7 +296,7 @@ function setMood(i){
 }
 function react(i){setMood(i);until=Date.now()+HOLD_MS}
 cycle.addEventListener('click',()=>{manualUntil=0;react((mood+1)%names.length);manualUntil=Date.now()+30000;stage='manual expression (30s)';});
-collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=cycle.hidden=debug.hidden=voice.hidden=upload.hidden=testAudio.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';showControls(true)});
+collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=cycle.hidden=debug.hidden=voice.hidden=upload.hidden=testAudio.hidden=syncVoice.hidden=deleteVoice.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';showControls(true)});
 panel.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;const r=panel.getBoundingClientRect();drag={x:e.clientX,y:e.clientY,left:r.left,top:r.top};panel.setPointerCapture(e.pointerId)});
 panel.addEventListener('pointermove',e=>{if(!drag)return;panel.style.left=Math.max(0,Math.min(innerWidth-panel.offsetWidth,drag.left+e.clientX-drag.x))+'px';panel.style.top=Math.max(0,Math.min(innerHeight-panel.offsetHeight,drag.top+e.clientY-drag.y))+'px';panel.style.right='auto';panel.style.bottom='auto'});
 panel.addEventListener('pointerup',()=>drag=null);panel.addEventListener('pointercancel',()=>drag=null);panel.addEventListener('lostpointercapture',()=>drag=null);
