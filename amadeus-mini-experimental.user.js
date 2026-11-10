@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.5.2
+// @version      0.5.3
 // @description  Cleaner avatar controls and compliment-aware reactions; no AI calls
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -100,6 +100,25 @@ function latestAssistantText(){
  return (node?.innerText||node?.textContent||'').trim().toLowerCase();
 }
 
+// Accent-insensitive, Unicode-aware matching for English and Brazilian Portuguese.
+function normalized(t){return (t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();}
+function has(t,pattern){return pattern.test(normalized(t));}
+function userEmotion(t){
+ if(has(t,/\b(prettier|beautiful|cute|adorable|pretty|lovely|gorgeous|compliment|blush|fluster|embarrass|linda|lindo|bonita|bonito|fofa|fofo|adoravel|elogio|envergonhad[ao]|corad[ao])\b/))return 4;
+ if(has(t,/\b(thank\w*|congratulat\w*|well done|good job|great work|proud of you|obrigad[ao]|valeu|parabens|bom trabalho|mandou bem|orgulho de voce)\b/))return 2;
+ if(has(t,/\b(idiot\w*|pervert\w*|middle schooler|middle school degree|curriculum.*fake|stupid|baka|idiota|burra|burro|estupid[ao]|fraude|cientista de araque|ensino fundamental)\b/))return 3;
+ if(/christina/.test(t))return 4;
+ if(has(t,/\b(surpris\w*|no way|what\?!|surpres[ao]|inacreditavel|impressionante|nao acredito|que surpresa)\b/))return 5;
+ if(has(t,/\b(analy\w*|research\w*|calculat\w*|hypothes\w*|investigat\w*|analis\w*|pesquis\w*|calcul\w*|hipotes\w*|investig\w*|explique|explicar)\b/))return 1;
+ return -1;
+}
+function assistantEmotion(t){
+ if(has(t,/\b(hmph|idiot\w*|baka|annoyed|irritat\w*|idiota|irritad[ao]|raiva|hmph|baka)\b/))return 3;
+ if(has(t,/\b(embarrass\w*|blush\w*|fluster\w*|envergonhad[ao]|corad[ao]|sem graca)\b/))return 4;
+ if(has(t,/\b(congratulat\w*|great job|well done|excellent news|parabens|otimo trabalho|excelente noticia|bom trabalho|mandou bem|muito bem)\b/))return 2;
+ if(has(t,/\b(surpris\w*|unexpected|what\?!|surpres[ao]|inesperad[ao]|inacreditavel)\b/))return 5;
+ return -1;
+}
 function detect(){
  if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;setMood(0);}
  const messages=readMessages(),users=messages.filter(m=>m.role==='user'),last=users.at(-1)?.content||'';
@@ -122,24 +141,15 @@ function detect(){
    if(key!==assistantSignature){assistantSignature=key;assistantStable=0;stage='response changing';return;}
    if(++assistantStable!==2){stage='stabilizing';return;}
    assistantHandled=true;stage='classified';
-   const match=/\b(hmph|idiot|baka|annoyed|irritat)\b/.test(response)?3:
-     /\b(embarrass|blush|fluster)\b/.test(response)?4:
-     /\b(congratulat|great job|well done|excellent news)\b/.test(response)?2:
-     /\b(surpris|unexpected|what\?!)\b/.test(response)?5:-1;
+   const match=assistantEmotion(response);
    selected=match<0?'no emotion':names[match];
    if(match>=0 && match!==mood){react(match);stage='applied '+selected;}
    else stage=match<0?'no matching emotion':'same expression';
    return;
  }
  signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();assistantHandled=false;userReactedAt=Date.now();stage='user detected';selected='pending';responseLength=0;
- if(/\b(prettier|beautiful|cute|adorable|pretty|lovely|gorgeous|compliment|blush|fluster|embarrass)\b/.test(last))react(4);
- else if(/\b(thank|congratulat|well done|good job|great work|proud of you)\b/.test(last))react(2);
- else if(/\b(idiot|pervert|middle schooler|middle school degree|curriculum.*fake|stupid|baka)\b/.test(last))react(3);
- else if(/christina/.test(last))react(4);
- else if(/thank|congratulat|well done|good job|great work/.test(last))react(2);
- else if(/surpris|no way|what\?!/.test(last))react(5);
- else if(/embarrass|blush|fluster/.test(last))react(4);
- else if(/analy|research|calculat|hypothes|investigat/.test(last))react(1);
+ const userMatch=userEmotion(last);
+ if(userMatch>=0)react(userMatch);
  // Assistant text is intentionally not used here: streaming it could repeatedly
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
