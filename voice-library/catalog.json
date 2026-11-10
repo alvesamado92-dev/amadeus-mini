@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "library": "Amadeus Mini Voice Catalog",
+  "visibility": "metadata-only; recordings must be hosted privately with authorization",
+  "clips": [
+    {
+      "id": "crs-0030-full",
+      "source": "CRS0030",
+      "filename": "CRS_0030_full.mp3",
+      "tag": "strong_annoyance",
+      "intensity": 3,
+      "description": "Extended angry scolding, including hentai; not suitable as generic baka reaction",
+      "status": "user-tested",
+      "duration_seconds": 4.1
+    },
+    {
+      "id": "crs-0030-baka",
+      "source": "CRS0030",
+      "filename": "CRS_0030_baka_verified.mp3",
+      "tag": "teasing",
+      "intensity": 1,
+      "description": "Baka near the end; trim boundaries not yet verified; do not use previous incorrect trim",
+      "status": "needs-verified-trim"
+    },
+    {
+      "id": "crs-0041-surprise",
+      "source": "CRS0041",
+      "filename": "CRS_0041.wav",
+      "tag": "surprise",
+      "intensity": 2,
+      "description": "Short surprised Huh?! reaction",
+      "status": "user-tested"
+    },
+    {
+      "id": "crs-0001-attention",
+      "source": "CRS0001",
+      "tag": "attention",
+      "description": "Chotto...",
+      "status": "identified-not-imported"
+    },
+    {
+      "id": "crs-0002-curiosity",
+      "source": "CRS0002",
+      "tag": "curiosity",
+      "description": "Huh?",
+      "status": "identified-not-imported"
+    },
+    {
+      "id": "crs-0019-startle",
+      "source": "CRS0019",
+      "tag": "surprise",
+      "description": "Kya!",
+      "status": "identified-not-imported"
+    },
+    {
+      "id": "crs-0020-hesitation",
+      "source": "CRS0020",
+      "tag": "hesitation",
+      "description": "Ano...",
+      "status": "identified-not-imported"
+    },
+    {
+      "id": "crs-0034-attention",
+      "source": "CRS0034",
+      "tag": "attention",
+      "status": "identified-not-imported"
+    },
+    {
+      "id": "crs-0036-agreement",
+      "source": "CRS0036",
+      "tag": "agreement",
+      "description": "Surprise followed by agreement",
+      "status": "identified-not-imported"
+    },
+    {
+      "id": "crs-0058-agreement",
+      "source": "CRS0058",
+      "tag": "agreement",
+      "description": "Sō desu ne",
+      "status": "identified-not-imported"
+    }
+  ]
+}
