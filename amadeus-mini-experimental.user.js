@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.5.6
-// @description  Response-growth thinking detection with diagnostic telemetry and local voice clips
+// @version      0.5.7
+// @description  Early thinking state, gradual response expressions, selective voice reactions
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
 // @grant        none
@@ -42,6 +42,7 @@ let assistantSignature='', assistantStable=0, userReactedAt=0, assistantBaseline
 let stage='waiting', selected='none', source='none', responseLength=0, stableCount=0;
 let generating=false, thinkingStarted=0, generationSignal='none';
 let observedResponse='',lastResponseChange=0, responseGrowths=0, lastGrowthAt=0;
+let earlyThinkingAt=0,midAnswerEmotion=-1,midAnswerAt=0;
 const HOLD_MS=25000, CHECK_MS=350;
 // User-supplied clips stay in this browser's local storage; nothing is uploaded.
 const VOICE_PREFIX='amadeus-mini-voice-';
@@ -86,7 +87,7 @@ function setMood(i){
  portrait.style.opacity='0.3';
  transitionTimer=setTimeout(()=>{portrait.src=sprites[i];portrait.style.opacity='1';transitionTimer=null},110);
 }
-function react(i){if(i!==mood)voiceReaction(names[i]);setMood(i);until=Date.now()+HOLD_MS}
+function react(i,audible=false){if(audible&&i!==1&&i!==0&&i!==mood)voiceReaction(names[i]);setMood(i);until=Date.now()+HOLD_MS}
 cycle.addEventListener('click',()=>react((mood+1)%names.length));
 collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=cycle.hidden=debug.hidden=voice.hidden=upload.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';showControls(true)});
 panel.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;const r=panel.getBoundingClientRect();drag={x:e.clientX,y:e.clientY,left:r.left,top:r.top};panel.setPointerCapture(e.pointerId)});
@@ -162,7 +163,7 @@ function isGenerating(){
  generationSignal='none';return false;
 }
 function detect(){
- if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;generating=false;observedResponse='';responseGrowths=0;lastGrowthAt=0;setMood(0);}
+ if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;generating=false;observedResponse='';responseGrowths=0;lastGrowthAt=0;earlyThinkingAt=0;midAnswerEmotion=-1;setMood(0);}
  const messages=readMessages(),users=messages.filter(m=>m.role==='user'),last=users.at(-1)?.content||'';
  const cmd=[...users].reverse().map(m=>m.content).find(t=>/\bamadeus\s+(on|off)\b/.test(t));if(cmd)active=!/\bamadeus\s+off\b/.test(cmd);
  panel.style.display=active?'':'none';if(!active)return;
@@ -183,11 +184,21 @@ function detect(){
    }
    const uiGenerating=isGenerating();
    const growing=responseGrowths>0 && now-lastGrowthAt<1700;
-   if(uiGenerating||growing){
+   const awaitingFirstText=response===assistantBaseline && now-userReactedAt<120000;
+   if(uiGenerating||growing||awaitingFirstText){
      if(!generating){generating=true;thinkingStarted=now;}
-     generationSignal=uiGenerating?generationSignal:'response growth';
-     setMood(1);until=now+HOLD_MS;
-     stage='generating';return;
+     generationSignal=uiGenerating?generationSignal:(growing?'response growth':'awaiting answer');
+     // Allow a short reaction to the user's message, then start thinking
+     // immediately, even before the first visible assistant token.
+     if(now>=earlyThinkingAt){
+       const inlineEmotion=response.length>=110?assistantEmotion(response):-1;
+       if(inlineEmotion>=2 && (midAnswerEmotion===inlineEmotion || midAnswerAt===0)){
+         if(midAnswerAt===0){midAnswerAt=now;midAnswerEmotion=inlineEmotion;}
+         if(now-midAnswerAt>=900){setMood(inlineEmotion);until=now+HOLD_MS;stage='answer emotion';return;}
+       }else{midAnswerAt=0;midAnswerEmotion=-1;}
+       setMood(1);until=now+HOLD_MS;
+     }
+     stage=awaitingFirstText?'thinking before answer':'generating';return;
    }
    if(generating){generating=false;assistantSignature='';assistantStable=0;userReactedAt=Math.min(userReactedAt,now-3500);}
    // Wait until response text has stopped changing before classifying.
@@ -205,11 +216,11 @@ function detect(){
    assistantHandled=true;stage='classified';
    const match=assistantEmotion(response);
    selected=match<0?'no emotion':names[match];
-   if(match>=0 && match!==mood){react(match);stage='applied '+selected;}
+   if(match>=0 && match!==mood){react(match,true);stage='applied '+selected;}
    else stage=match<0?'no matching emotion':'same expression';
    return;
  }
- signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();observedResponse=assistantBaseline;lastResponseChange=Date.now();responseGrowths=0;lastGrowthAt=0;assistantHandled=false;generating=false;userReactedAt=Date.now();stage='user detected';selected='pending';responseLength=0;
+ signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();observedResponse=assistantBaseline;lastResponseChange=Date.now();responseGrowths=0;lastGrowthAt=0;assistantHandled=false;generating=false;userReactedAt=Date.now();earlyThinkingAt=userReactedAt+700;midAnswerEmotion=-1;midAnswerAt=0;stage='user detected';selected='pending';responseLength=0;
  const userMatch=userEmotion(last);
  if(userMatch>=0)react(userMatch);
  // Assistant text is intentionally not used here: streaming it could repeatedly
