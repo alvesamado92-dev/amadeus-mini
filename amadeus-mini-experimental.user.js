@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.6.1
-// @description  Adaptive voice cooldown, multiple clips per expression, selective reactions
+// @version      0.7.0
+// @description  Independent contextual voice reactions, IndexedDB audio library, manual previews
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
 // @grant        none
@@ -45,113 +45,160 @@ let observedResponse='',lastResponseChange=0, responseGrowths=0, lastGrowthAt=0;
 let earlyThinkingAt=0,midAnswerEmotion=-1,midAnswerAt=0;
 const HOLD_MS=25000, CHECK_MS=350;
 // User-supplied clips stay in this browser's local storage; nothing is uploaded.
-const VOICE_PREFIX='amadeus-mini-voice-';
 const VOICE_LIBRARY='amadeus-mini-voice-library-v1';
-let voiceEnabled=false,lastVoiceAt=0,playing=null,lastVoiceKey='',lastVoiceMood='',lastVoiceKeyAt=0;
-let voiceHistory=[],voiceCursor={},voiceStatus='not tested';
+const VOICE_DB='amadeus-mini-audio-v2';
+const VOICE_TAGS=['surprise','teasing','agreement','attention','hesitation','curiosity','celebration','other'];
+let voiceEnabled=false,playing=null,voiceStatus='initializing',voiceClips=[],voiceLastAt=0,voiceHistory=[],voiceLastId='',voiceLastTag='',voiceLastClipAt=0;
 let manualUntil=0;
-function voiceClips(name){
- let list=[];
- try{const stored=JSON.parse(localStorage.getItem(VOICE_LIBRARY)||'{}');list=Array.isArray(stored[name])?stored[name]:[];}catch(e){}
- // Keep clips imported in previous versions.
- try{const legacy=localStorage.getItem(VOICE_PREFIX+name);if(legacy&&!list.some(c=>c.url===legacy))list.unshift({id:'legacy',label:'Previous '+name+' clip',url:legacy});}catch(e){}
- return list.filter(c=>c&&typeof c.url==='string'&&c.url.startsWith('data:audio/'));
+const dbPromise=new Promise((resolve,reject)=>{
+ try{
+  const req=indexedDB.open(VOICE_DB,1);
+  req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains('clips'))db.createObjectStore('clips',{keyPath:'id'});};
+  req.onsuccess=()=>resolve(req.result);
+  req.onerror=()=>reject(req.error);
+ }catch(e){reject(e);}
+});
+async function getStoredClips(){
+ const db=await dbPromise;
+ return new Promise((resolve,reject)=>{
+  const req=db.transaction('clips','readonly').objectStore('clips').getAll();
+  req.onsuccess=()=>resolve(req.result||[]);req.onerror=()=>reject(req.error);
+ });
 }
-function chooseClip(name,context){
- const clips=voiceClips(name);if(!clips.length)return null;
- const t=normalized(context||'');
- const score=c=>{
-  const label=normalized(c.label||'');
-  const terms={
-   annoyed:/baka|idiot|pervert|hentai|teas|insult/,
-   surprised:/surpris|shock|huh|eh|kya|gasp/,
-   embarrassed:/shy|blush|ano|chotto|fluster/,
-   happy:/agree|wakatta|understood|sodesu|sou desu|great|happy/
-  };
-  let n=0;
-  if(terms[name]?.test(label))n+=2;
-  if(/\b(agree|understand|got it|correct|yes|indeed|right)\b/.test(t)&&/agree|wakatta|sodesu|sou desu/.test(label))n+=4;
-  if(/\b(baka|idiot|pervert|hentai)\b/.test(t)&&/baka|idiot|pervert|hentai/.test(label))n+=4;
-  if(/\b(surprise|shocked|what|unexpected)\b/.test(t)&&/surpris|huh|eh|kya/.test(label))n+=4;
-  return n;
- };
- const max=Math.max(...clips.map(score));
- const candidates=clips.filter(c=>score(c)===max);
- const idx=(voiceCursor[name]||0)%candidates.length;voiceCursor[name]=(voiceCursor[name]||0)+1;
- return candidates[idx];
+async function storeClip(record){
+ const db=await dbPromise;
+ return new Promise((resolve,reject)=>{
+  const tx=db.transaction('clips','readwrite');tx.objectStore('clips').put(record);
+  tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+ });
 }
-function voiceReaction(name,preview=false,context=''){
+async function removeClip(id){
+ const db=await dbPromise;
+ return new Promise((resolve,reject)=>{
+  const tx=db.transaction('clips','readwrite');tx.objectStore('clips').delete(id);
+  tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);
+ });
+}
+function suggestedTag(label){
+ const t=label.toLowerCase();
+ if(/0030|baka|idiot|hentai/.test(t))return 'teasing';
+ if(/0041|0019|0036|surpris|huh|kya/.test(t))return 'surprise';
+ if(/0058|wakatta|agree|sodesu/.test(t))return 'agreement';
+ if(/0001|0002|0034|moshi/.test(t))return 'attention';
+ if(/0020|ano|hesita/.test(t))return 'hesitation';
+ return 'other';
+}
+async function reloadVoice(){
+ try{voiceClips=await getStoredClips();voiceStatus='ready: '+voiceClips.length+' clip(s)';}
+ catch(e){voiceStatus='storage error: '+(e?.name||e?.message||'unknown');}
+}
+async function migrateLegacyVoice(){
+ try{
+  const old=JSON.parse(localStorage.getItem(VOICE_LIBRARY)||'{}');
+  const existing=await getStoredClips();
+  const known=new Set(existing.map(c=>c.legacyKey).filter(Boolean));
+  let count=0;
+  for(const [expression,list] of Object.entries(old)){
+   if(!Array.isArray(list))continue;
+   for(let i=0;i<list.length;i++){
+    const c=list[i],key=expression+':'+i+':'+(c.id||c.label||'');
+    if(!c?.url?.startsWith('data:audio/')||known.has(key))continue;
+    const response=await fetch(c.url),blob=await response.blob();
+    await storeClip({id:'legacy-'+expression+'-'+i+'-'+Date.now(),legacyKey:key,label:c.label||expression+' audio',tag:suggestedTag(c.label||expression),blob});
+    known.add(key);count++;
+   }
+  }
+  // Older single-clip storage format.
+  for(const expression of names){
+   const url=localStorage.getItem('amadeus-mini-voice-'+expression),key='single:'+expression;
+   if(url?.startsWith('data:audio/')&&!known.has(key)){
+    const blob=await (await fetch(url)).blob();
+    await storeClip({id:'legacy-single-'+expression,legacyKey:key,label:'Previous '+expression+' clip',tag:suggestedTag(expression),blob});
+    count++;
+   }
+  }
+  await reloadVoice();
+  if(count)voiceStatus='migrated '+count+' old clip(s); '+voiceClips.length+' total';
+ }catch(e){voiceStatus='migration issue: '+(e?.name||e?.message||'unknown');await reloadVoice();}
+}
+migrateLegacyVoice();
+function stopVoice(){if(playing){playing.pause();playing.src='';playing=null;}}
+async function playClip(clip,manual=false){
  if(!voiceEnabled){voiceStatus='muted';return;}
- if(document.hidden){voiceStatus='tab hidden';return;}
- const now=Date.now();
- if(!preview){
-  voiceHistory=voiceHistory.filter(t=>now-t<60000);
-  if(voiceHistory.length>=3||now-lastVoiceAt<3000){voiceStatus='rate limited';return;}
-  // An ordinary reaction gets a 9-second gap; an emotionally distinct
-  // follow-up can play after 3 seconds.
-  if(now-lastVoiceAt<9000&&name===lastVoiceMood){voiceStatus='same expression cooldown';return;}
- }
- const clip=chooseClip(name,context);if(!clip){voiceStatus='no clips for '+name;return;}
- if(!preview&&clip.id===lastVoiceKey&&now-lastVoiceKeyAt<20000){voiceStatus='clip cooldown';return;}
- // Never interrupt a currently playing voice clip.
- if(playing&&!playing.paused&&!playing.ended){voiceStatus='audio already playing';return;}
- const audio=new Audio(clip.url);audio.volume=0.5;
- playing=audio;
- audio.addEventListener('ended',()=>{if(playing===audio)playing=null},{once:true});
- audio.addEventListener('error',()=>{if(playing===audio)playing=null},{once:true});
- audio.play().then(()=>{
-  voiceStatus='playing '+clip.label;
-  if(!preview){lastVoiceAt=now;voiceHistory.push(now);lastVoiceKey=clip.id;lastVoiceMood=name;lastVoiceKeyAt=now;}
- }).catch(e=>{voiceStatus='playback blocked: '+(e?.name||'unknown');if(playing===audio)playing=null});
+ if(!manual&&document.hidden){voiceStatus='tab hidden';return;}
+ if(!clip){voiceStatus='no matching clip';return;}
+ if(!manual){
+  const now=Date.now();voiceHistory=voiceHistory.filter(t=>now-t<60000);
+  if(voiceHistory.length>=3||now-voiceLastAt<4500){voiceStatus='cooldown';return;}
+  if(clip.id===voiceLastId&&now-voiceLastClipAt<20000){voiceStatus='clip cooldown';return;}
+  if(clip.tag===voiceLastTag&&now-voiceLastAt<10000){voiceStatus='reaction cooldown';return;}
+  if(playing&&!playing.paused&&!playing.ended){voiceStatus='already speaking';return;}
+ }else stopVoice();
+ const url=URL.createObjectURL(clip.blob);
+ const audio=new Audio(url);audio.volume=0.7;playing=audio;
+ voiceStatus='loading '+clip.label;
+ const cleanup=()=>{URL.revokeObjectURL(url);if(playing===audio)playing=null;};
+ audio.addEventListener('ended',cleanup,{once:true});
+ audio.addEventListener('error',()=>{voiceStatus='decode error: '+clip.label;cleanup();},{once:true});
+ try{
+  await audio.play();
+  voiceStatus='played '+clip.label+' ('+clip.tag+')';
+  if(!manual){const now=Date.now();voiceLastAt=now;voiceLastId=clip.id;voiceLastClipAt=now;voiceLastTag=clip.tag;voiceHistory.push(now);}
+ }catch(e){voiceStatus='playback blocked: '+(e?.name||e?.message||'unknown');cleanup();}
+}
+function selectVoiceTag(response,userText){
+ const text=(response||'').toLowerCase(),user=(userText||'').toLowerCase();
+ // Select a reaction independently from the current face.
+ if(/(?:^|[\s"'“])(?:baka|バカ|ばか|idiot|pervert|hentai)(?:[!！\s"'”]|$)/i.test(text) && /teas|idiot|middle school|baka|fake diploma|pervert|hentai|ridiculous|insult/i.test(user))return 'teasing';
+ if(/(?:^|[\s"'“])(?:ehh+|e-hh+|huh\?!|えっ|ええっ|なに\?|what\?!|kya|きゃ)(?:[!！\s"'”]|$)/i.test(text) && /surpris|unexpected|discover|shock|can't believe|no way/i.test(user))return 'surprise';
+ if(/(?:wakatta|わかった|そうですね|sō desu ne|understood|i agree|you're right)/i.test(text) && /agree|understand|correct|confirm|got it|right/i.test(user))return 'agreement';
+ if(/(?:moshi moshi|もしもし|hey, professor|listen to me)/i.test(text))return 'attention';
+ if(/(?:ano|あの|um\.\.\.|uh\.\.\.)/i.test(text) && /awkward|embarrass|hesitat|shy/i.test(user))return 'hesitation';
+ return null;
+}
+function automaticVoice(response,userText){
+ const tag=selectVoiceTag(response,userText);
+ if(!tag){voiceStatus='no voice trigger';return;}
+ const candidates=voiceClips.filter(c=>c.tag===tag);
+ if(!candidates.length){voiceStatus='no clip tagged '+tag;return;}
+ const clip=candidates.find(c=>c.id!==voiceLastId)||candidates[0];
+ playClip(clip,false);
 }
 voice.addEventListener('click',()=>{
  voiceEnabled=!voiceEnabled;voice.textContent=voiceEnabled?'♪':'♪×';
  voice.title=voiceEnabled?'Voice enabled; click to mute':'Voice muted; click to enable';
- if(!voiceEnabled&&playing){playing.pause();playing=null;}
- // Do not automatically play audio merely because the user unmuted.
+ voiceStatus=voiceEnabled?'voice enabled':'muted';
+ if(!voiceEnabled)stopVoice();
 });
-testAudio.addEventListener('click',()=>{
- if(!voiceEnabled){voiceStatus='muted - enable voice first';alert('Enable voice using ♪× before testing.');return;}
- let library=[];for(const name of names){for(const clip of voiceClips(name))library.push({name,clip});}
- if(!library.length){voiceStatus='no imported clips in this browser';alert('No imported clips were found in this browser. Please import them again.');return;}
- const menu=library.map((x,i)=>(i+1)+'. '+x.name+' — '+x.clip.label).join('\n');
- const answer=prompt('Choose a recording to play:\n'+menu,'1');
- if(answer===null)return;
- const index=Number(answer)-1;
- if(!Number.isInteger(index)||index<0||index>=library.length){alert('Select a number from the list.');return;}
- const {name,clip}=library[index];
- if(playing){playing.pause();playing=null;}
- const audio=new Audio(clip.url);audio.volume=0.7;playing=audio;
- voiceStatus='testing '+name+': '+clip.label;
- audio.addEventListener('ended',()=>{if(playing===audio)playing=null},{once:true});
- audio.addEventListener('error',()=>{voiceStatus='audio decode error: '+clip.label;if(playing===audio)playing=null},{once:true});
- audio.play().then(()=>{voiceStatus='played '+name+': '+clip.label;}).catch(e=>{voiceStatus='playback blocked: '+(e?.name||'unknown');if(playing===audio)playing=null;});
- setTimeout(refreshDiagnostics,250);
+testAudio.addEventListener('click',async()=>{
+ if(!voiceEnabled){alert('Enable voice with ♪× first.');return;}
+ await reloadVoice();
+ if(!voiceClips.length){alert('No clips in IndexedDB. Use ♫+ to import a recording.');return;}
+ const menu=voiceClips.map((c,i)=>(i+1)+'. '+c.label+' ['+c.tag+']').join('\n');
+ const choice=prompt('Choose a clip to play:\n'+menu,'1');
+ if(choice===null)return;
+ const index=Number(choice)-1;
+ if(!Number.isInteger(index)||index<0||index>=voiceClips.length){alert('Invalid clip number');return;}
+ await playClip(voiceClips[index],true);
+ refreshDiagnostics();
 });
-upload.title='Add a short audio clip for the current expression (multiple allowed)';
+upload.title='Import a voice line independently of facial expressions (stored in IndexedDB)';
 upload.addEventListener('click',()=>picker.click());
-picker.addEventListener('change',()=>{
+picker.addEventListener('change',async()=>{
  const file=picker.files?.[0];picker.value='';
- if(!file||!file.type.startsWith('audio/'))return;
- if(file.size>500000){alert('Use a short audio clip under 500 KB.');return;}
- const chosen=prompt('Assign this clip to which expression?\n'+names.map((n,i)=>(i+1)+'. '+n).join('\n'),String(Math.max(1,mood+1)));
- if(chosen===null)return;
- const target=Number(chosen)-1;if(!Number.isInteger(target)||target<0||target>=names.length){alert('Invalid expression number.');return;}
- const moodName=names[target],reader=new FileReader();
- reader.onload=()=>{
-  try{
-   const stored=JSON.parse(localStorage.getItem(VOICE_LIBRARY)||'{}');
-   const list=Array.isArray(stored[moodName])?stored[moodName]:[];
-   const id='clip-'+Date.now()+'-'+list.length;
-   list.push({id,label:file.name,url:String(reader.result)});
-   stored[moodName]=list;localStorage.setItem(VOICE_LIBRARY,JSON.stringify(stored));
-   upload.title='Saved '+list.length+' '+moodName+' clip(s) locally. Click to add another.';
-   if(voiceEnabled)voiceReaction(moodName,true,file.name);
-  }catch(e){alert('Could not save clip in browser storage. Try a smaller audio file.');}
- };
- reader.readAsDataURL(file);
+ if(!file)return;
+ if(!file.type.startsWith('audio/')&&!/\.(wav|mp3|ogg|m4a|webm)$/i.test(file.name)){alert('Choose an audio file.');return;}
+ const suggested=suggestedTag(file.name);
+ const tag=prompt('Choose a voice reaction tag (independent of expression):\n'+VOICE_TAGS.join(', '),suggested);
+ if(tag===null)return;
+ const normalizedTag=tag.trim().toLowerCase();
+ if(!VOICE_TAGS.includes(normalizedTag)){alert('Invalid tag. Choose one from the list.');return;}
+ try{
+  await storeClip({id:'clip-'+Date.now()+'-'+Math.random().toString(36).slice(2,8),label:file.name,tag:normalizedTag,blob:file});
+  await reloadVoice();voiceStatus='imported '+file.name+' ['+normalizedTag+']';
+  alert('Imported '+file.name+' as '+normalizedTag+'. Use ▶ to test playback.');
+ }catch(e){voiceStatus='import failed: '+(e?.name||e?.message||'unknown');alert(voiceStatus);}
 });
-
 let transitionTimer=null;
 const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches||false;
 if(reducedMotion)portrait.style.transition='none';
@@ -165,7 +212,7 @@ function setMood(i){
  portrait.style.opacity='0.3';
  transitionTimer=setTimeout(()=>{portrait.src=sprites[i];portrait.style.opacity='1';transitionTimer=null},110);
 }
-function react(i,audible=false,context=''){if(audible&&i!==1&&i!==0)voiceReaction(names[i],false,context);setMood(i);until=Date.now()+HOLD_MS}
+function react(i){setMood(i);until=Date.now()+HOLD_MS}
 cycle.addEventListener('click',()=>{manualUntil=0;react((mood+1)%names.length);manualUntil=Date.now()+30000;stage='manual expression (30s)';});
 collapse.addEventListener('click',()=>{minimized=!minimized;portrait.hidden=cycle.hidden=debug.hidden=voice.hidden=upload.hidden=testAudio.hidden=minimized;diagnostic.style.display='none';collapse.textContent=minimized?'+':'−';showControls(true)});
 panel.addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;const r=panel.getBoundingClientRect();drag={x:e.clientX,y:e.clientY,left:r.left,top:r.top};panel.setPointerCapture(e.pointerId)});
@@ -294,8 +341,9 @@ function detect(){
    assistantHandled=true;stage='classified';
    const match=assistantEmotion(response);
    selected=match<0?'no emotion':names[match];
-   if(match>=0){react(match,true,response);stage='applied '+selected;}
-   else stage=match<0?'no matching emotion':'same expression';
+   if(match>=0){react(match);stage='applied '+selected;}
+   else stage='no matching emotion';
+   automaticVoice(response,last);
    return;
  }
  signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();observedResponse=assistantBaseline;lastResponseChange=Date.now();responseGrowths=0;lastGrowthAt=0;assistantHandled=false;generating=false;userReactedAt=Date.now();earlyThinkingAt=userReactedAt+700;midAnswerEmotion=-1;midAnswerAt=0;stage='user detected';selected='pending';responseLength=0;
@@ -304,7 +352,7 @@ function detect(){
  // Assistant text is intentionally not used here: streaming it could repeatedly
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
-function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' ('+(generating&&generationSignal==='none'?'response growth':generationSignal)+') | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' ('+voiceClips(names[mood]).length+' clips) | Audio: '+voiceStatus+' | Current face: '+names[mood]+' | Manual override: '+Math.max(0,Math.ceil((manualUntil-Date.now())/1000))+'s | User messages: '+users.length;}
+function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' | Stored clips: '+voiceClips.map(c=>c.label+' ['+c.tag+']').join(', ')+' | Audio: '+voiceStatus+' | Current face: '+names[mood]+' | Manual override: '+Math.max(0,Math.ceil((manualUntil-Date.now())/1000))+'s | User messages: '+users.length;}
 debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
 // No network requests, no model calls. Stop scanning when the tab is hidden.
