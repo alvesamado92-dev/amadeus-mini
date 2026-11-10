@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.5.0
+// @version      0.5.1
 // @description  Cleaner avatar controls and compliment-aware reactions; no AI calls
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -69,20 +69,28 @@ panel.addEventListener('pointermove',e=>{if(!drag)return;panel.style.left=Math.m
 panel.addEventListener('pointerup',()=>drag=null);panel.addEventListener('pointercancel',()=>drag=null);panel.addEventListener('lostpointercapture',()=>drag=null);
 window.addEventListener('resize',()=>{if(panel.style.left){panel.style.left=Math.max(0,Math.min(innerWidth-panel.offsetWidth,parseFloat(panel.style.left)||0))+'px';panel.style.top=Math.max(0,Math.min(innerHeight-panel.offsetHeight,parseFloat(panel.style.top)||0))+'px';}});
 function readMessages(){
+ const headings=[...document.querySelectorAll('main [data-conversation-role]')];
+ if(headings.length)return headings.map(el=>({role:el.getAttribute('data-conversation-role'),content:[...el.parentElement.children].filter(child=>child!==el).map(child=>child.innerText||child.textContent||'').join(' ').trim().toLowerCase()}));
  const explicit=[...document.querySelectorAll('[data-message-author-role]')];
  if(explicit.length)return explicit.map(el=>({role:el.getAttribute('data-message-author-role'),content:(el.innerText||el.textContent||'').trim().toLowerCase()}));
  return [...document.querySelectorAll('main .whitespace-pre-wrap,main [class*="whitespace-pre-wrap"]')].filter(el=>!el.querySelector('[class*="whitespace-pre-wrap"]')).map(el=>({role:'user',content:(el.innerText||el.textContent||'').trim().toLowerCase()})).filter(m=>m.content);
 }
 function latestAssistantText(){
+ const headings=[...document.querySelectorAll('main [data-conversation-role="assistant"]')];
+ const heading=headings.at(-1);
+ if(heading){
+   source='conversation-role';
+   const content=[...heading.parentElement.children].filter(el=>el!==heading).map(el=>el.innerText||el.textContent||'').join(' ');
+   return content.trim().toLowerCase();
+ }
  const explicit=[...document.querySelectorAll('[data-message-author-role="assistant"]')].at(-1);
  if(explicit){source='role';return (explicit.innerText||explicit.textContent||'').trim().toLowerCase();}
- // Firefox Android often omits role attributes. Rendered assistant prose
- // normally lives in a markdown container; user bubbles use whitespace-pre-wrap.
  const nodes=[...document.querySelectorAll('main .markdown, main [class*="markdown"]')].filter(el=>!el.parentElement?.closest('.markdown, [class*="markdown"]'));
  const node=nodes.at(-1);
  source=node?'markdown':'missing';
  return (node?.innerText||node?.textContent||'').trim().toLowerCase();
 }
+
 function detect(){
  if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;setMood(0);}
  const messages=readMessages(),users=messages.filter(m=>m.role==='user'),last=users.at(-1)?.content||'';
