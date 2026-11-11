@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.8.7
+// @version      0.8.8
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -45,7 +45,7 @@ let assistantSignature='', assistantStable=0, userReactedAt=0, assistantBaseline
 let stage='waiting', selected='none', source='none', responseLength=0, stableCount=0;
 let generating=false, thinkingStarted=0, generationSignal='none';
 let observedResponse='',lastResponseChange=0, responseGrowths=0, lastGrowthAt=0;
-let earlyThinkingAt=0,midAnswerEmotion=-1,midAnswerAt=0;
+let earlyThinkingAt=0,midAnswerEmotion=-1,midAnswerAt=0,voiceAttemptedThisTurn=false;
 const HOLD_MS=25000, CHECK_MS=350;
 // User-supplied clips stay in this browser's local storage; nothing is uploaded.
 const VOICE_LIBRARY='amadeus-mini-voice-library-v1';
@@ -466,7 +466,7 @@ function isGenerating(){
  generationSignal='none';return false;
 }
 function detect(){
- if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;generating=false;observedResponse='';responseGrowths=0;lastGrowthAt=0;earlyThinkingAt=0;midAnswerEmotion=-1;setMood(0);}
+ if(location.pathname!==lastPath){lastPath=location.pathname;signature='';assistantSignature='';assistantStable=0;assistantBaseline='';assistantHandled=false;until=0;generating=false;observedResponse='';responseGrowths=0;lastGrowthAt=0;earlyThinkingAt=0;midAnswerEmotion=-1;voiceAttemptedThisTurn=false;setMood(0);}
  const messages=readMessages(),users=messages.filter(m=>m.role==='user'),last=users.at(-1)?.content||'';
  const cmd=[...users].reverse().map(m=>m.content).find(t=>/\bamadeus\s+(on|off)\b/.test(t));if(cmd)active=!/\bamadeus\s+off\b/.test(cmd);
  panel.style.display=active?'':'none';if(!active)return;
@@ -491,6 +491,12 @@ function detect(){
    if(uiGenerating||growing||awaitingFirstText){
      if(!generating){generating=true;thinkingStarted=now;}
      generationSignal=uiGenerating?generationSignal:(growing?'response growth':'awaiting answer');
+     // Try one context-appropriate interjection during streaming, not after the reader finishes.
+     // Wait for enough text to judge context and avoid firing on the first token.
+     if(!voiceAttemptedThisTurn && response.length>=110 && response!==assistantBaseline && now-userReactedAt>=1200){
+       voiceAttemptedThisTurn=true;
+       automaticVoice(reactionDecision(response,last),response,last);
+     }
      // Allow a short reaction to the user's message, then start thinking
      // immediately, even before the first visible assistant token.
      if(now>=earlyThinkingAt){
@@ -522,10 +528,10 @@ function detect(){
    selected=match<0?'no emotion':names[match];
    if(match>=0){react(match);stage='applied '+selected+' ('+decision.reason+')';}
    else stage='no matching emotion';
-   automaticVoice(decision,response,last);
+   if(!voiceAttemptedThisTurn)voiceStatus='natural silence: no early interjection';
    return;
  }
- signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();observedResponse=assistantBaseline;lastResponseChange=Date.now();responseGrowths=0;lastGrowthAt=0;assistantHandled=false;generating=false;userReactedAt=Date.now();earlyThinkingAt=userReactedAt+700;midAnswerEmotion=-1;midAnswerAt=0;stage='user detected';selected='pending';responseLength=0;
+ signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();observedResponse=assistantBaseline;lastResponseChange=Date.now();responseGrowths=0;lastGrowthAt=0;assistantHandled=false;generating=false;userReactedAt=Date.now();earlyThinkingAt=userReactedAt+700;midAnswerEmotion=-1;midAnswerAt=0;voiceAttemptedThisTurn=false;stage='user detected';selected='pending';responseLength=0;
  const userMatch=userEmotion(last);
  if(userMatch>=0)react(userMatch);
  // Assistant text is intentionally not used here: streaming it could repeatedly
