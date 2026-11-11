@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.8.5
+// @version      0.8.6
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -224,7 +224,7 @@ async function playClip(clip,manual=false){
  audio.addEventListener('error',()=>{voiceStatus='decode error: '+clip.label;cleanup();},{once:true});
  try{
   await audio.play();
-  beginVoiceFace(audio,clip.tag);
+  // Preserve conversational expression; voice and face are independent.
   voiceStatus='played '+clip.label+' ('+clip.tag+')';
   if(!manual){const now=Date.now();voiceLastAt=now;voiceLastId=clip.id;voiceLastClipAt=now;voiceLastTag=clip.tag;voiceHistory.push(now);}
  }catch(e){voiceStatus='playback blocked: '+(e?.name||e?.message||'unknown');cleanup();}
@@ -254,12 +254,38 @@ function reactionDecision(response,userText){
  if(curious)return {face:1,tag:'curiosity',reason:'curiosity'};
  return {face:-1,tag:null,reason:'no reliable reaction'};
 }
-function automaticVoice(decision){
- const tag=decision.tag;
- if(!tag){voiceStatus='no voice trigger: '+decision.reason;return;}
+// Audio is an independent, optional conversational interjection, not a face-to-tag mapping.
+let eligibleVoiceTurns=0;
+function chooseVoiceTag(response,userText){
+ const t=normalized(response),u=normalized(userText);
+ const first=t.slice(0,260);
+ const playful=/\b(baka|idiot|you idiot|hmph|don't look|dont look)\b/.test(first);
+ const surprise=/\b(e-?eh[!?]|huh[!?]|what[!?]|kya)\b/.test(first)||/\b(seriously|you actually|no way)\b/.test(first);
+ const attention=/\b(chotto|hey professor|listen|hold on|one moment)\b/.test(first);
+ const agreement=/\b(you're right|you are right|exactly|i agree|fair point|good thinking)\b/.test(first);
+ const curious=/\b(hmm|interesting|i wonder|curious|intriguing)\b/.test(first);
+ const hesitant=/\b(um|uh|ano|perhaps)\b/.test(first);
+ const banter=/\b(professor|christina|graduat|diploma|high school|assistant|baka|teas|jok)\b/.test(u);
+ const technical=/\b(cancer|diagnosis|medical|death|suicide|emergency|legal|financial|surgery|biopsy)\b/.test(u);
+ if(technical)return null;
+ if(playful)return 'teasing';
+ if(surprise)return 'surprise';
+ if(attention)return 'attention';
+ if(agreement)return 'agreement';
+ if(curious)return 'curiosity';
+ if(hesitant)return 'hesitation';
+ if(banter&&/\b(ahaha|fufu|haha|hmph|oh\?|really\?|well now)\b/.test(t))return 'attention';
+ return null;
+}
+function automaticVoice(decision,response,userText){
+ if(!voiceEnabled){voiceStatus='muted';return;}
+ const tag=chooseVoiceTag(response,userText);
+ if(!tag){voiceStatus='natural silence: no suitable interjection';return;}
  const candidates=voiceClips.filter(c=>c.tag===tag);
  if(!candidates.length){voiceStatus='no clip tagged '+tag;return;}
- // Favor a different clip on repeated reactions, while respecting existing cooldowns.
+ eligibleVoiceTurns++;
+ // Occasional, not guaranteed: first eligible moment is sampled too.
+ if(Math.random()>(eligibleVoiceTurns<=2?0.8:0.55)){voiceStatus='natural silence: sampled';return;}
  const clip=candidates.find(c=>c.id!==voiceLastId)||candidates[0];
  playClip(clip,false);
 }
@@ -493,7 +519,7 @@ function detect(){
    selected=match<0?'no emotion':names[match];
    if(match>=0){react(match);stage='applied '+selected+' ('+decision.reason+')';}
    else stage='no matching emotion';
-   automaticVoice(decision);
+   automaticVoice(decision,response,last);
    return;
  }
  signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();observedResponse=assistantBaseline;lastResponseChange=Date.now();responseGrowths=0;lastGrowthAt=0;assistantHandled=false;generating=false;userReactedAt=Date.now();earlyThinkingAt=userReactedAt+700;midAnswerEmotion=-1;midAnswerAt=0;stage='user detected';selected='pending';responseLength=0;
