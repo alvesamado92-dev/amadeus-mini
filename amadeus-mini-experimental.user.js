@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.0
+// @version      0.9.1
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -53,7 +53,8 @@ const VOICE_DB='amadeus-mini-audio-v2';
 const PRIVATE_REPO='alvesamado92-dev/amadeus-voice-library';
 const PRIVATE_TOKEN_KEY='amadeus-private-voice-token-v1';
 const VOICE_TAGS=['surprise','teasing','strong_annoyance','agreement','attention','hesitation','curiosity','celebration','other'];
-let voiceEnabled=false,playing=null,voiceStatus='initializing',voiceClips=[],voiceLastAt=0,voiceHistory=[],voiceLastId='',voiceLastTag='',voiceLastClipAt=0;
+const VOICE_ENABLED_KEY='amadeus-mini-voice-enabled-v1';
+let voiceEnabled=GM_getValue(VOICE_ENABLED_KEY,false)===true,playing=null,voiceStatus='initializing',voiceClips=[],voiceLastAt=0,voiceHistory=[],voiceLastId='',voiceLastTag='',voiceLastClipAt=0;
 let manualUntil=0;
 // Temporary voice expression: held only while audio actually plays.
 let voiceFaceActive=false,voiceFacePrevious=0,voiceFaceAudio=null;
@@ -304,7 +305,7 @@ function automaticVoice(decision,response,userText){
  playClip(clip,false);
 }
 voice.addEventListener('click',()=>{
- voiceEnabled=!voiceEnabled;voice.textContent=voiceEnabled?'♪':'♪×';
+ voiceEnabled=!voiceEnabled;GM_setValue(VOICE_ENABLED_KEY,voiceEnabled);voice.textContent=voiceEnabled?'♪':'♪×';
  voice.title=voiceEnabled?'Voice enabled; click to mute':'Voice muted; click to enable';
  voiceStatus=voiceEnabled?'voice enabled':'muted';
  if(!voiceEnabled)stopVoice();
