@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.8.4
+// @version      0.8.5
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -55,6 +55,22 @@ const PRIVATE_TOKEN_KEY='amadeus-private-voice-token-v1';
 const VOICE_TAGS=['surprise','teasing','strong_annoyance','agreement','attention','hesitation','curiosity','celebration','other'];
 let voiceEnabled=false,playing=null,voiceStatus='initializing',voiceClips=[],voiceLastAt=0,voiceHistory=[],voiceLastId='',voiceLastTag='',voiceLastClipAt=0;
 let manualUntil=0;
+// Temporary voice expression: held only while audio actually plays.
+let voiceFaceActive=false,voiceFacePrevious=0,voiceFaceAudio=null;
+const voiceFaces={surprise:5,teasing:3,strong_annoyance:3,agreement:2,attention:0,hesitation:4,curiosity:1,celebration:2};
+function beginVoiceFace(audio,tag){
+ if(Date.now()<manualUntil)return;
+ const face=voiceFaces[tag];
+ if(face===undefined)return;
+ voiceFacePrevious=mood;voiceFaceAudio=audio;voiceFaceActive=true;
+ setMood(face,true);
+}
+function endVoiceFace(audio){
+ if(voiceFaceAudio!==audio)return;
+ voiceFaceAudio=null;voiceFaceActive=false;
+ if(Date.now()>=manualUntil)setMood(voiceFacePrevious,true);
+}
+
 const dbPromise=new Promise((resolve,reject)=>{
  try{
   const req=indexedDB.open(VOICE_DB,1);
@@ -188,7 +204,7 @@ async function migrateLegacyVoice(){
  }catch(e){voiceStatus='migration issue: '+(e?.name||e?.message||'unknown');await reloadVoice();}
 }
 migrateLegacyVoice();
-function stopVoice(){if(playing){playing.pause();playing.src='';playing=null;}}
+function stopVoice(){if(playing){const audio=playing;audio.pause();audio.src='';playing=null;endVoiceFace(audio);}}
 async function playClip(clip,manual=false){
  if(!voiceEnabled){voiceStatus='muted';return;}
  if(!manual&&document.hidden){voiceStatus='tab hidden';return;}
@@ -203,11 +219,12 @@ async function playClip(clip,manual=false){
  const url=URL.createObjectURL(clip.blob);
  const audio=new Audio(url);audio.volume=0.7;playing=audio;
  voiceStatus='loading '+clip.label;
- const cleanup=()=>{URL.revokeObjectURL(url);if(playing===audio)playing=null;};
+ const cleanup=()=>{URL.revokeObjectURL(url);endVoiceFace(audio);if(playing===audio)playing=null;};
  audio.addEventListener('ended',cleanup,{once:true});
  audio.addEventListener('error',()=>{voiceStatus='decode error: '+clip.label;cleanup();},{once:true});
  try{
   await audio.play();
+  beginVoiceFace(audio,clip.tag);
   voiceStatus='played '+clip.label+' ('+clip.tag+')';
   if(!manual){const now=Date.now();voiceLastAt=now;voiceLastId=clip.id;voiceLastClipAt=now;voiceLastTag=clip.tag;voiceHistory.push(now);}
  }catch(e){voiceStatus='playback blocked: '+(e?.name||e?.message||'unknown');cleanup();}
@@ -334,8 +351,8 @@ picker.addEventListener('change',async()=>{
 let transitionTimer=null;
 const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches||false;
 if(reducedMotion)portrait.style.transition='none';
-function setMood(i){
- if(Date.now()<manualUntil)return;
+function setMood(i,force=false){
+ if(!force&&(Date.now()<manualUntil||voiceFaceActive))return;
  if(i===mood)return;
  mood=i;panel.dataset.mood=names[i];
  if(transitionTimer!==null)clearTimeout(transitionTimer);
