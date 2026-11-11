@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.8.3
+// @version      0.8.4
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -212,21 +212,37 @@ async function playClip(clip,manual=false){
   if(!manual){const now=Date.now();voiceLastAt=now;voiceLastId=clip.id;voiceLastClipAt=now;voiceLastTag=clip.tag;voiceHistory.push(now);}
  }catch(e){voiceStatus='playback blocked: '+(e?.name||e?.message||'unknown');cleanup();}
 }
-function selectVoiceTag(response,userText){
- const text=(response||'').toLowerCase(),user=(userText||'').toLowerCase();
- // Select a reaction independently from the current face.
- if(/(?:^|[\s"'“])(?:baka|バカ|ばか|idiot|pervert|hentai)(?:[!！\s"'”]|$)/i.test(text) && /teas|idiot|middle school|baka|fake diploma|pervert|hentai|ridiculous|insult/i.test(user))return 'teasing';
- if(/(?:^|[\s"'“])(?:ehh+|e-hh+|huh\?!|えっ|ええっ|なに\?|what\?!|kya|きゃ)(?:[!！\s"'”]|$)/i.test(text) && /surpris|unexpected|discover|shock|can't believe|no way/i.test(user))return 'surprise';
- if(/(?:wakatta|わかった|そうですね|sō desu ne|understood|i agree|you're right)/i.test(text) && /agree|understand|correct|confirm|got it|right/i.test(user))return 'agreement';
- if(/(?:moshi moshi|もしもし|hey, professor|listen to me)/i.test(text))return 'attention';
- if(/(?:ano|あの|um\.\.\.|uh\.\.\.)/i.test(text) && /awkward|embarrass|hesitat|shy/i.test(user))return 'hesitation';
- return null;
+// One shared decision for face and voice; never infer a voice from an unrelated quoted keyword.
+function reactionDecision(response,userText){
+ const t=normalized(response),u=normalized(userText);
+ const any=(re)=>re.test(t),user=(re)=>re.test(u);
+ const playful=any(/\b(ahaha|haha(?:ha)*|hehe|heh|fufu|giggl\w*|chuckl\w*|laugh\w*|funny|hilarious|made me smile|amusing)\b|[♪😂😄]/);
+ const positive=any(/\b(congratulat\w*|great job|well done|excellent|good news|glad|happy|nice work|parabens|otimo|excelente|bom trabalho)\b/);
+ const angry=any(/\b(hmph|idiot\w*|baka|pervert|hentai|annoyed|irritat\w*|idiota|irritad[ao])\b/);
+ const bashful=any(/\b(embarrass\w*|blush\w*|fluster\w*|envergonhad[ao]|corad[ao]|b-baka)\b/);
+ const startled=any(/(?:^|[\s"'“])(?:eh\?!|huh\?!|what\?!|kya|えっ|ええっ|きゃ)(?:[!！\s"'”]|$)|\b(shocked|startled|surprised|unexpected|inacreditavel)\b/);
+ const agreeing=any(/\b(agree|agreed|you(?:'re| are) right|correct|indeed|exactly|understood|makes sense|so desu ne|sou desu ne|wakatta|concordo|correto|exatamente)\b|そうですね|わかった/);
+ const curious=any(/\b(hmm+|interesting|intriguing|curious|i wonder|let me think|why would|how does|hypothesis|investigat\w*|research|analys\w*|interessante|curioso)\b/);
+ const hesitant=any(/\b(ano|um+|uh+|hesitat\w*|not sure|perhaps|maybe)\b/);
+ const attention=any(/\b(chotto|hey professor|listen|one moment|hold on|by the way)\b/);
+ const joke=user(/\b(lol|lmao|haha|hehe|jok\w*|teas\w*|funny|hilarious|oops|my bad|that's on me|thats on me)\b/);
+ if(playful)return {face:2,tag:null,reason:'playful amusement (smile only; no laugh clip yet)'};
+ if(bashful)return {face:4,tag:hesitant?'hesitation':null,reason:'flustered'};
+ if(startled)return {face:5,tag:'surprise',reason:'surprised'};
+ if(angry)return {face:3,tag:/\b(baka|idiot|pervert|hentai|b-baka)\b/.test(t)?'teasing':'strong_annoyance',reason:'annoyed/teasing'};
+ if(agreeing)return {face:positive||joke?2:0,tag:'agreement',reason:'agreement'};
+ if(positive||joke)return {face:2,tag:null,reason:'positive/playful'};
+ if(attention)return {face:0,tag:'attention',reason:'attention'};
+ if(hesitant)return {face:4,tag:'hesitation',reason:'hesitation'};
+ if(curious)return {face:1,tag:'curiosity',reason:'curiosity'};
+ return {face:-1,tag:null,reason:'no reliable reaction'};
 }
-function automaticVoice(response,userText){
- const tag=selectVoiceTag(response,userText);
- if(!tag){voiceStatus='no voice trigger';return;}
+function automaticVoice(decision){
+ const tag=decision.tag;
+ if(!tag){voiceStatus='no voice trigger: '+decision.reason;return;}
  const candidates=voiceClips.filter(c=>c.tag===tag);
  if(!candidates.length){voiceStatus='no clip tagged '+tag;return;}
+ // Favor a different clip on repeated reactions, while respecting existing cooldowns.
  const clip=candidates.find(c=>c.id!==voiceLastId)||candidates[0];
  playClip(clip,false);
 }
@@ -432,7 +448,7 @@ function detect(){
      // Allow a short reaction to the user's message, then start thinking
      // immediately, even before the first visible assistant token.
      if(now>=earlyThinkingAt){
-       const inlineEmotion=response.length>=110?assistantEmotion(response):-1;
+       const inlineEmotion=response.length>=110?reactionDecision(response,last).face:-1;
        if(inlineEmotion>=2 && (midAnswerEmotion===inlineEmotion || midAnswerAt===0)){
          if(midAnswerAt===0){midAnswerAt=now;midAnswerEmotion=inlineEmotion;}
          if(now-midAnswerAt>=900){setMood(inlineEmotion);until=now+HOLD_MS;stage='answer emotion';return;}
@@ -455,11 +471,12 @@ function detect(){
    if(key!==assistantSignature){assistantSignature=key;assistantStable=0;stage='response changing';return;}
    if(++assistantStable!==2){stage='stabilizing';return;}
    assistantHandled=true;stage='classified';
-   const match=assistantEmotion(response);
+   const decision=reactionDecision(response,last);
+   const match=decision.face;
    selected=match<0?'no emotion':names[match];
-   if(match>=0){react(match);stage='applied '+selected;}
+   if(match>=0){react(match);stage='applied '+selected+' ('+decision.reason+')';}
    else stage='no matching emotion';
-   automaticVoice(response,last);
+   automaticVoice(decision);
    return;
  }
  signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();observedResponse=assistantBaseline;lastResponseChange=Date.now();responseGrowths=0;lastGrowthAt=0;assistantHandled=false;generating=false;userReactedAt=Date.now();earlyThinkingAt=userReactedAt+700;midAnswerEmotion=-1;midAnswerAt=0;stage='user detected';selected='pending';responseLength=0;
