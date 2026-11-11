@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.8.6
+// @version      0.8.7
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -257,24 +257,27 @@ function reactionDecision(response,userText){
 // Audio is an independent, optional conversational interjection, not a face-to-tag mapping.
 let eligibleVoiceTurns=0;
 function chooseVoiceTag(response,userText){
- const t=normalized(response),u=normalized(userText);
- const first=t.slice(0,260);
- const playful=/\b(baka|idiot|you idiot|hmph|don't look|dont look)\b/.test(first);
- const surprise=/\b(e-?eh[!?]|huh[!?]|what[!?]|kya)\b/.test(first)||/\b(seriously|you actually|no way)\b/.test(first);
- const attention=/\b(chotto|hey professor|listen|hold on|one moment)\b/.test(first);
- const agreement=/\b(you're right|you are right|exactly|i agree|fair point|good thinking)\b/.test(first);
- const curious=/\b(hmm|interesting|i wonder|curious|intriguing)\b/.test(first);
- const hesitant=/\b(um|uh|ano|perhaps)\b/.test(first);
- const banter=/\b(professor|christina|graduat|diploma|high school|assistant|baka|teas|jok)\b/.test(u);
- const technical=/\b(cancer|diagnosis|medical|death|suicide|emergency|legal|financial|surgery|biopsy)\b/.test(u);
- if(technical)return null;
- if(playful)return 'teasing';
+ const t=normalized(response),u=normalized(userText),first=t.slice(0,260);
+ // Talking ABOUT voice reactions is not itself an invitation to play one.
+ const meta=/\b(voice|audio|recording|clip|playback|trigger|classifier|keyword|sync|synchroniz|timing|delay|script|version|reaction system|expression|sprite|diagnostic|debug)\b/.test(u);
+ const explanatory=/\b(voice|audio|recording|clip|playback|trigger|classifier|keyword|sync|timing|delay|script|reaction|expression|sprite)\b/.test(first);
+ const serious=/\b(cancer|diagnosis|medical|death|suicide|emergency|legal|financial|surgery|biopsy)\b/.test(u);
+ if(serious||meta||explanatory)return null;
+ // Require a direct playful address, not a quoted or explanatory occurrence of a word.
+ const teasing=/\b(?:you(?:'re| are) (?:such an? )?(?:idiot|baka)|baka professor|you (?:little )?baka|hmph!|don't look so pleased)\b/.test(first);
+ const surprise=/\b(?:e-?eh[!?]|huh[!?]|what[!?]|kya)\b/.test(first)||/\b(?:seriously\?|you actually|no way!)\b/.test(first);
+ const attention=/\b(?:chotto|hey professor|listen|hold on|one moment)\b/.test(first);
+ const agreement=/\b(?:you're right|you are right|exactly|i agree|fair point|good thinking)\b/.test(first);
+ const curious=/\b(?:hmm|interesting|i wonder|curious|intriguing)\b/.test(first);
+ const hesitant=/\b(?:um|uh|ano|perhaps)\b/.test(first);
+ const banter=/\b(?:professor|christina|graduat|diploma|high school|assistant|teas|jok)\b/.test(u);
+ if(teasing)return 'teasing';
  if(surprise)return 'surprise';
  if(attention)return 'attention';
  if(agreement)return 'agreement';
  if(curious)return 'curiosity';
  if(hesitant)return 'hesitation';
- if(banter&&/\b(ahaha|fufu|haha|hmph|oh\?|really\?|well now)\b/.test(t))return 'attention';
+ if(banter&&/\b(?:ahaha|fufu|haha|hmph)\b/.test(first))return 'attention';
  return null;
 }
 function automaticVoice(decision,response,userText){
