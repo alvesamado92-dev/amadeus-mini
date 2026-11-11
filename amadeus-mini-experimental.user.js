@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.8.9
+// @version      0.9.0
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -293,7 +293,7 @@ function automaticVoice(decision,response,userText){
  const candidates=voiceClips.filter(c=>c.tag===reaction.tag);
  if(!candidates.length){voiceStatus='no clip tagged '+reaction.tag;return;}
  eligibleVoiceTurns++;
- if(Math.random()>(eligibleVoiceTurns<=2?0.8:0.6)){voiceStatus='natural silence: sampled';return;}
+ if(Math.random()>0.70){voiceStatus='natural silence: sampled';return;}
  let pool=candidates;
  if(reaction.tag==='agreement'){
   const id=reaction.nuance==='embarrassed'?'crs-0036-agreement':'crs-0058-agreement';
@@ -505,8 +505,13 @@ function detect(){
      // Try one context-appropriate interjection during streaming, not after the reader finishes.
      // Wait for enough text to judge context and avoid firing on the first token.
      if(!voiceAttemptedThisTurn && response.length>=110 && response!==assistantBaseline && now-userReactedAt>=1200){
-       voiceAttemptedThisTurn=true;
-       automaticVoice(reactionDecision(response,last),response,last);
+       // Don't spend the one permitted voice attempt on an incomplete opening.
+       // Keep checking as the response grows, but never start a late post-completion clip.
+       const candidate=chooseVoiceReaction(response,last);
+       if(candidate){
+         voiceAttemptedThisTurn=true;
+         automaticVoice(reactionDecision(response,last),response,last);
+       }else voiceStatus='waiting for contextual reaction';
      }
      // Allow a short reaction to the user's message, then start thinking
      // immediately, even before the first visible assistant token.
