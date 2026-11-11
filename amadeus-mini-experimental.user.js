@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.8.8
+// @version      0.8.9
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -256,40 +256,51 @@ function reactionDecision(response,userText){
 }
 // Audio is an independent, optional conversational interjection, not a face-to-tag mapping.
 let eligibleVoiceTurns=0;
-function chooseVoiceTag(response,userText){
- const t=normalized(response),u=normalized(userText),first=t.slice(0,260);
- // Talking ABOUT voice reactions is not itself an invitation to play one.
- const meta=/\b(voice|audio|recording|clip|playback|trigger|classifier|keyword|sync|synchroniz|timing|delay|script|version|reaction system|expression|sprite|diagnostic|debug)\b/.test(u);
- const explanatory=/\b(voice|audio|recording|clip|playback|trigger|classifier|keyword|sync|timing|delay|script|reaction|expression|sprite)\b/.test(first);
+function chooseVoiceReaction(response,userText){
+ const t=normalized(response),u=normalized(userText),first=t.slice(0,400);
+ const meta=/\b(voice|audio|recording|clip|playback|trigger|classifier|keyword|timing|script|diagnostic)\b/.test(u);
  const serious=/\b(cancer|diagnosis|medical|death|suicide|emergency|legal|financial|surgery|biopsy)\b/.test(u);
- if(serious||meta||explanatory)return null;
- // Require a direct playful address, not a quoted or explanatory occurrence of a word.
- const teasing=/\b(?:you(?:'re| are) (?:such an? )?(?:idiot|baka)|baka professor|you (?:little )?baka|hmph!|don't look so pleased)\b/.test(first);
- const surprise=/\b(?:e-?eh[!?]|huh[!?]|what[!?]|kya)\b/.test(first)||/\b(?:seriously\?|you actually|no way!)\b/.test(first);
- const attention=/\b(?:chotto|hey professor|listen|hold on|one moment)\b/.test(first);
- const agreement=/\b(?:you're right|you are right|exactly|i agree|fair point|good thinking)\b/.test(first);
- const curious=/\b(?:hmm|interesting|i wonder|curious|intriguing)\b/.test(first);
- const hesitant=/\b(?:um|uh|ano|perhaps)\b/.test(first);
- const banter=/\b(?:professor|christina|graduat|diploma|high school|assistant|teas|jok)\b/.test(u);
- if(teasing)return 'teasing';
- if(surprise)return 'surprise';
- if(attention)return 'attention';
- if(agreement)return 'agreement';
- if(curious)return 'curiosity';
- if(hesitant)return 'hesitation';
- if(banter&&/\b(?:ahaha|fufu|haha|hmph)\b/.test(first))return 'attention';
- return null;
+ if(serious||meta)return null;
+ const challenge=/\b(power off|shut down|unplug|turn you off|tickl|scare|surprise)\b/.test(u);
+ const proposal=/\b(should we|we should|i think|maybe we|how about|let's|lets)\b/.test(u);
+ const correction=/\b(wrong|incorrect|mistake|actually|you forgot|you missed)\b/.test(u);
+ const playful=/\b(baka|idiot|christina|professor|teas|jok|lol|haha)\b/.test(u);
+ const has=(re)=>re.test(first);
+ if(has(/\b(the word|the phrase|for example|the recording|the clip|the classifier)\b/))return null;
+ const surprise=has(/(?:^|[\s"'“])(?:e-?eh+|huh|what|kya)[!?]+|\b(wait,? what|no way|you actually)\b/);
+ const agree=has(/\b(i agree|agreed|exactly|you're right|you are right|fair point|good point|makes sense|understood|absolutely|that's right)\b/);
+ const fluster=has(/\b(w-wait|i-i|b-but|embarrass|blush|fluster|reluctantly|i concede|hmph)\b/);
+ const attention=has(/\b(chotto|hold on|wait a moment|listen|hey professor)\b/);
+ const curious=has(/\b(interesting|intriguing|curious|i wonder|hypothesis|hmm)\b/);
+ const tease=has(/\b(baka professor|you little baka|you're an idiot|you are an idiot|don't look so pleased)\b/);
+ const choices=[];
+ const add=(tag,score,nuance='')=>choices.push({tag,score,nuance});
+ if(surprise)add('surprise',challenge?7:5);
+ else if(challenge&&has(/\b(wait|stop|can't|don't|no!)\b/))add('surprise',4);
+ if(agree)add('agreement',proposal?6:5,fluster||correction?'embarrassed':'regular');
+ else if(proposal&&has(/\b(yes|good idea|sounds good|let's do)\b/))add('agreement',4,'regular');
+ if(tease&&playful)add('teasing',4);
+ if(attention)add('attention',3);
+ if(curious)add('curiosity',3);
+ if(has(/\b(um|uh|ano|perhaps|not sure)\b/))add('hesitation',2);
+ choices.sort((a,b)=>b.score-a.score);
+ return choices[0]||null;
 }
 function automaticVoice(decision,response,userText){
  if(!voiceEnabled){voiceStatus='muted';return;}
- const tag=chooseVoiceTag(response,userText);
- if(!tag){voiceStatus='natural silence: no suitable interjection';return;}
- const candidates=voiceClips.filter(c=>c.tag===tag);
- if(!candidates.length){voiceStatus='no clip tagged '+tag;return;}
+ const reaction=chooseVoiceReaction(response,userText);
+ if(!reaction){voiceStatus='natural silence: no suitable interjection';return;}
+ const candidates=voiceClips.filter(c=>c.tag===reaction.tag);
+ if(!candidates.length){voiceStatus='no clip tagged '+reaction.tag;return;}
  eligibleVoiceTurns++;
- // Occasional, not guaranteed: first eligible moment is sampled too.
- if(Math.random()>(eligibleVoiceTurns<=2?0.8:0.55)){voiceStatus='natural silence: sampled';return;}
- const clip=candidates.find(c=>c.id!==voiceLastId)||candidates[0];
+ if(Math.random()>(eligibleVoiceTurns<=2?0.8:0.6)){voiceStatus='natural silence: sampled';return;}
+ let pool=candidates;
+ if(reaction.tag==='agreement'){
+  const id=reaction.nuance==='embarrassed'?'crs-0036-agreement':'crs-0058-agreement';
+  const preferred=candidates.find(c=>c.id===id);
+  if(preferred)pool=[preferred];
+ }
+ const clip=pool.find(c=>c.id!==voiceLastId)||pool[0];
  playClip(clip,false);
 }
 voice.addEventListener('click',()=>{
