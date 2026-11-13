@@ -10,6 +10,9 @@
 // @grant        GM_setValue
 // @connect      api.github.com
 // @connect      huggingface.co
+// @connect      *.huggingface.co
+// @connect      *.hf.co
+// @connect      *.xethub.hf.co
 // @connect      datasets-server.huggingface.co
 // @noframes
 // @updateURL    https://raw.githubusercontent.com/alvesamado92-dev/amadeus-mini/main/amadeus-mini-experimental.user.js
@@ -411,7 +414,7 @@ function automaticVoice(decision,response,userText){
  if(!reaction&&!voiceClips.some(c=>c.intent&&voiceIntentFits(c.intent,response,userText))){voiceStatus='natural silence: no suitable interjection';voiceDecisionLog+=' | no matching response cue';return;}
  const contextual=voiceClips.filter(c=>c.intent&&voiceIntentFits(c.intent,response,userText));
  const candidates=contextual.length?contextual:voiceClips.filter(c=>!c.intent&&c.tag===reaction?.tag);
- if(!candidates.length){voiceStatus='no clip tagged '+reaction.tag;voiceDecisionLog+=' | missing tagged clip';return;}
+ if(!candidates.length){voiceStatus='no clip tagged '+(reaction?.tag||'contextual');voiceDecisionLog+=' | missing tagged clip';return;}
  eligibleVoiceTurns++;
  if(Math.random()>0.70){voiceStatus='natural silence: sampled';voiceDecisionLog+=' | skipped: probability';return;}
  let pool=candidates;
@@ -679,7 +682,7 @@ function detect(){
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
 function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' | Stored clips: '+voiceClips.map(c=>c.label+' ['+c.tag+']').join(', ')+' | Audio: '+voiceStatus+' | Voice decision: '+voiceDecisionLog+' | HF import: '+hfImportStatus+' | Voice stats: '+Object.values(voiceStats.plays).reduce((a,b)=>a+b,0)+' plays | Eligible turns: '+eligibleVoiceTurns+' | Current face: '+names[mood]+' | Manual override: '+Math.max(0,Math.ceil((manualUntil-Date.now())/1000))+'s | User messages: '+users.length;}
-debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
+debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';statsButton.style.display=diagnostic.style.display==='block'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
 // Local stats persist across reloads; daily buckets are based on the device clock.
 const statsButton=document.createElement('button');
@@ -687,7 +690,8 @@ statsButton.textContent='Export voice stats';
 statsButton.title='Download JSON of per-clip and per-day playback counts';
 statsButton.style.cssText='position:fixed;right:12px;bottom:12px;z-index:2147483646;font:11px system-ui;padding:5px 8px;opacity:.55;cursor:pointer';
 statsButton.addEventListener('click',exportVoiceStats);
-diagnostic.append(document.createElement('br'),statsButton);
+document.body.append(statsButton);
+statsButton.style.display='none';
 // Voice WAVs are fetched from the public dataset; private sync remains opt-in.
 
 function tick(){
