@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.7
+// @version      0.9.8
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -178,27 +178,40 @@ async function importHfCandidates(){
   let added=0,unresolved=0;
   const addClip=async(item)=>{
    if(stored.has(item.id))return;
-   const data=await hfGet(HF_ROOT+encodeURIComponent(item.file),true);
+   const data=await hfGet(item.url||HF_ROOT+encodeURIComponent(item.file),true);
    if(!(data instanceof ArrayBuffer)||data.byteLength<100||data.byteLength>8000000)throw Error('invalid WAV '+item.file);
    await storeClip({id:item.id,label:item.label,tag:item.tag,intent:item.intent,source:'huggingface',blob:new Blob([data],{type:'audio/wav'})});
    stored.add(item.id);added++;
   };
   for(const item of NEW_VOICE){try{await addClip(item)}catch(e){unresolved++;hfImportErrors.push(item.id+': '+(e?.message||String(e)));}}
-  // Verify the row's English transcript AND its audio path before importing.
+  // Search translated text and use the structured audio URL instead of assuming a filename.
   try{
-   const api='https://datasets-server.huggingface.co/rows?dataset=starrydark%2FMakise_Kurisu_Voice&config=default&split=train&offset=200&length=100';
-   const result=JSON.parse(await hfGet(api));
-   for(const spec of POSITIONAL_VOICE){
-    const entry=(result.rows||[]).find(r=>r.row_idx===200+spec.position-1);
-    const data=entry?.row||{};
-    const textual=Object.entries(data).filter(([k])=>!/audio|path|file|source|id/i.test(k)).map(([,v])=>typeof v==='string'?v:'').join(' ');
-    const serialized=JSON.stringify(data);
-    const file=(serialized.match(/game_ja_[a-zA-Z0-9_]+\.wav/)||[])[0];
-    if(!entry||!spec.check.test(textual)||!file){unresolved++;hfImportErrors.push('position '+spec.position+': '+(!entry?'row absent':!spec.check.test(textual)?'transcript mismatch: '+textual.slice(0,90):'no WAV path in dataset row'));continue;}
-    const item={...spec,id:'hf-position-'+spec.position,file};
-    try{await addClip(item)}catch(e){unresolved++;hfImportErrors.push('position '+spec.position+': '+(e?.message||String(e)));}
+   const found=new Map();let inspected=0;let sample='';
+   for(let offset=0;offset<500&&found.size<POSITIONAL_VOICE.length;offset+=100){
+    const api='https://datasets-server.huggingface.co/rows?dataset=starrydark%2FMakise_Kurisu_Voice&config=default&split=train&offset='+offset+'&length=100';
+    let result;try{result=JSON.parse(await hfGet(api));}catch(e){hfImportErrors.push('API offset '+offset+': '+e.message);break;}
+    const rows=result.rows||[];if(!rows.length)break;
+    for(const entry of rows){
+     inspected++;const data=entry.row||{};
+     const transcript=Object.entries(data).filter(([k])=>!/audio|path|file|source|id/i.test(k)).map(([,v])=>typeof v==='string'?v:'').join(' ');
+     if(!sample)sample='keys '+Object.keys(data).join(',')+' example '+transcript.slice(0,90);
+     for(const spec of POSITIONAL_VOICE){
+      if(found.has(spec.position)||!spec.check.test(transcript))continue;
+      const audio=data.audio||Object.values(data).find(v=>v&&typeof v==='object'&&typeof v.src==='string');
+      const src=audio?.src||audio?.url;const path=audio?.path||data.path||data.file;
+      const file=(String(path||'').match(/game_ja_[a-zA-Z0-9_]+\.wav/)||[])[0];
+      const url=typeof src==='string'&&src.startsWith('https://')?src:null;
+      if(!file&&!url){hfImportErrors.push('phrase '+spec.position+' matched but no audio URL');continue;}
+      found.set(spec.position,{...spec,id:'hf-position-'+spec.position,file,url});
+     }
+    }
    }
-  }catch(e){unresolved+=POSITIONAL_VOICE.length;hfImportErrors.push('dataset rows API: '+(e?.message||String(e)));}
+   for(const spec of POSITIONAL_VOICE){
+    const item=found.get(spec.position);
+    if(!item){unresolved++;hfImportErrors.push('phrase '+spec.position+' not matched in '+inspected+' rows; '+sample);continue;}
+    try{await addClip(item)}catch(e){unresolved++;hfImportErrors.push('phrase '+spec.position+': '+e.message);}
+   }
+  }catch(e){unresolved+=POSITIONAL_VOICE.length;hfImportErrors.push('dataset: '+e.message);}
   await reloadVoice();
   hfImportStatus=added+' imported; '+unresolved+' unresolved'+(hfImportErrors.length?' | '+hfImportErrors.slice(0,3).join(' / '):'');
  }finally{hfImportBusy=false;}
