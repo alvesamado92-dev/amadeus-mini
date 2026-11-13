@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.10
+// @version      0.9.11
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -68,7 +68,11 @@ const HF_ROOT='https://huggingface.co/datasets/starrydark/Makise_Kurisu_Voice/re
 const NEW_VOICE=[
  {id:'hf-00227',file:'game_ja_PHENO_kurisu_00227.wav',label:'Grrrr...!',intent:'growl',tag:'strong_annoyance'},
  {id:'hf-00228',file:'game_ja_PHENO_kurisu_00228.wav',label:'Enough already! Stop joking around...',intent:'stop_joking',tag:'teasing'},
- {id:'hf-00059',file:'game_ja_PHENO_kurisu_00059.wav',label:'Oh, wait a minute!',intent:'wait_realization',tag:'attention'}
+ {id:'hf-00059',file:'game_ja_PHENO_kurisu_00059.wav',label:'Oh, wait a minute!',intent:'wait_realization',tag:'attention'},
+ {id:'hf-00398',file:'game_ja_PHENO_kurisu_00398.wav',label:'Peeking Pervert',intent:'peeking_protest',tag:'teasing'},
+ {id:'hf-00400',file:'game_ja_PHENO_kurisu_00400.wav',label:'Just Thinking',intent:'deny_anger',tag:'teasing'},
+ {id:'hf-00425',file:'game_ja_PHENO_kurisu_00425.wav',label:'Worried for Nothing',intent:'false_alarm_relief',tag:'hesitation'},
+ {id:'hf-00426',file:'game_ja_PHENO_kurisu_00426.wav',label:'Stop Teasing Me',intent:'embarrassed_protest',tag:'teasing'}
 ];
 const POSITIONAL_VOICE=[
  {position:5,file:'game_ja_PHENO_kurisu_00272.wav',label:'I want to help you',intent:'offer_help',tag:'agreement'},
@@ -168,6 +172,10 @@ const CLIP_DISPLAY_NAMES={
  'hf-00227':'Frustrated Growl',
  'hf-00228':'Stop Joking',
  'hf-00059':'Wait a Minute',
+ 'hf-00398':'Peeking Pervert',
+ 'hf-00400':'Just Thinking',
+ 'hf-00425':'Worried for Nothing',
+ 'hf-00426':'Stop Teasing Me',
  'hf-position-5':'Want to Help',
  'hf-position-14':'Your Assistant',
  'hf-position-18':'Hello',
@@ -424,6 +432,10 @@ function voiceIntentFits(intent,response,userText){
   case 'embarrassed_accept':return /\b(i won.t refuse|i suppose i can|fine,? i.ll|i guess i can)\b/.test(t)&&/\b(embarrass\w*|fluster\w*|blush\w*|reluctant\w*|looks away)\b/.test(t);
   case 'suspicious_exchange':return exchange&&/\b(in return|something in return|what do you want|you expect|quid pro quo)\b/.test(t);
   case 'deny_sulking':return /\b(i.m not sulking|not sulking|i.m not pouting)\b/.test(t)&&/\b(sulk\w*|pout\w*|upset|grumpy)\b/.test(u);
+  case 'peeking_protest':return /\\b(peek\\w*|peeping|pervert)\\b/.test(u)&&/\\b(peek\\w*|peeping|pervert|stop looking|don.t look)\\b/.test(t)&&joking;
+  case 'deny_anger':return /\\b(angry|mad at|upset with|annoyed with)\\b/.test(u)&&/\\b(i.m not angry|not angry|just thinking|i.m thinking)\\b/.test(t);
+  case 'false_alarm_relief':return /\\b(false alarm|nothing to worry|all (?:good|fine|okay)|turned out fine|no problem after all|worr\\w* for nothing)\\b/.test(t)&&/\\b(worr\\w*|scared|panic|problem|issue|false alarm|fixed|resolved|fine now)\\b/.test(u);
+  case 'embarrassed_protest':return joking&&/\\b(stop (?:teasing|making fun)|don.t (?:tease|make fun)|shut up|you.re embarrassing me)\\b/.test(t)&&/\\b(teas\\w*|jok\\w*|embarrass\\w*|blush|fluster\\w*|making fun)\\b/.test(u);
   default:return false;
  }
 }
