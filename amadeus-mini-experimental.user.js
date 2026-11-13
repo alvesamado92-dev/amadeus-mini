@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.5
+// @version      0.9.6
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -9,6 +9,8 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @connect      api.github.com
+// @connect      huggingface.co
+// @connect      datasets-server.huggingface.co
 // @noframes
 // @updateURL    https://raw.githubusercontent.com/alvesamado92-dev/amadeus-mini/main/amadeus-mini-experimental.user.js
 // @downloadURL  https://raw.githubusercontent.com/alvesamado92-dev/amadeus-mini/main/amadeus-mini-experimental.user.js
@@ -56,6 +58,41 @@ const PRIVATE_REPO='alvesamado92-dev/amadeus-voice-library';
 const PRIVATE_TOKEN_KEY='amadeus-private-voice-token-v1';
 const VOICE_TAGS=['surprise','teasing','strong_annoyance','agreement','attention','hesitation','curiosity','celebration','other'];
 const VOICE_ENABLED_KEY='amadeus-mini-voice-enabled-v1';
+const VOICE_STATS_KEY='amadeus-mini-voice-stats-v1';
+const HF_REV='a78b349ddb740db8a11bcac8eafcd49fe8654428';
+const HF_ROOT='https://huggingface.co/datasets/starrydark/Makise_Kurisu_Voice/resolve/'+HF_REV+'/data/train/000/';
+const NEW_VOICE=[
+ {id:'hf-00227',file:'game_ja_PHENO_kurisu_00227.wav',label:'Grrrr...!',intent:'growl',tag:'strong_annoyance'},
+ {id:'hf-00228',file:'game_ja_PHENO_kurisu_00228.wav',label:'Enough already! Stop joking around...',intent:'stop_joking',tag:'teasing'},
+ {id:'hf-00059',file:'game_ja_PHENO_kurisu_00059.wav',label:'Oh, wait a minute!',intent:'wait_realization',tag:'attention'}
+];
+const POSITIONAL_VOICE=[
+ {position:5,label:'I want to help you',intent:'offer_help',tag:'agreement',check:/i want to help you/i},
+ {position:14,label:'Me, your assistant',intent:'assistant_identity',tag:'attention',check:/me,? your assistant/i},
+ {position:18,label:'Hello',intent:'greeting',tag:'attention',check:/\bhello\b/i},
+ {position:21,label:"That's just plain sexual harassment",intent:'sexual_boundary',tag:'strong_annoyance',check:/sexual harassment/i},
+ {position:22,label:"I don't need it. Seriously...",intent:'reject_offer',tag:'teasing',check:/i don.t need it/i},
+ {position:27,label:'But I refuse.',intent:'refusal',tag:'teasing',check:/but i refuse/i},
+ {position:28,label:"Oh, no, I won't refuse.",intent:'embarrassed_accept',tag:'hesitation',check:/won.t refuse/i},
+ {position:30,label:"You're not seriously planning on asking for something in return, are you?!",intent:'suspicious_exchange',tag:'surprise',check:/asking for something in return/i},
+ {position:88,label:"I'm not sulking",intent:'deny_sulking',tag:'teasing',check:/not sulking/i}
+];
+let voiceStats=GM_getValue(VOICE_STATS_KEY,{version:1,plays:{},daily:{},attempts:{}})||{version:1,plays:{},daily:{},attempts:{}};
+if(!voiceStats.plays)voiceStats={version:1,plays:{},daily:{},attempts:{}};
+function recordVoiceStat(clip,kind){
+ const day=new Date().toLocaleDateString('en-CA');
+ const bucket=kind==='played'?'plays':'attempts';
+ voiceStats[bucket][clip.id]=(voiceStats[bucket][clip.id]||0)+1;
+ if(!voiceStats.daily[day])voiceStats.daily[day]={};
+ const key=clip.id+':'+kind;
+ voiceStats.daily[day][key]=(voiceStats.daily[day][key]||0)+1;
+ GM_setValue(VOICE_STATS_KEY,voiceStats);
+}
+function exportVoiceStats(){
+ const payload={exportedAt:new Date().toISOString(),stats:voiceStats,clips:voiceClips.map(c=>({id:c.id,label:c.label,intent:c.intent||'',tag:c.tag,plays:voiceStats.plays[c.id]||0}))};
+ const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));
+ const a=document.createElement('a');a.href=url;a.download='amadeus-voice-stats-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
 let voiceEnabled=GM_getValue(VOICE_ENABLED_KEY,false)===true,playing=null,voiceStatus='initializing',voiceClips=[],voiceLastAt=0,voiceHistory=[],voiceLastId='',voiceLastTag='',voiceLastClipAt=0;
 let manualUntil=0;
 // Temporary voice expression: held only while audio actually plays.
@@ -117,6 +154,51 @@ async function reloadVoice(){
  try{voiceClips=await getStoredClips();voiceStatus='ready: '+voiceClips.length+' clip(s)';}
  catch(e){voiceStatus='storage error: '+(e?.name||e?.message||'unknown');}
 }
+
+// The dataset viewer is paginated. Positions are untrusted until the translated
+// transcript at that exact row matches the user-provided phrase.
+function hfGet(url,binary=false){
+ return new Promise((resolve,reject)=>GM_xmlhttpRequest({
+  method:'GET',url,responseType:binary?'arraybuffer':'text',timeout:25000,
+  onload:r=>r.status>=200&&r.status<300?resolve(r.response):reject(Error('HTTP '+r.status)),
+  onerror:()=>reject(Error('network error')),ontimeout:()=>reject(Error('timeout'))
+ }));
+}
+let hfImportBusy=false,hfImportStatus='not checked';
+async function importHfCandidates(){
+ if(hfImportBusy)return;
+ hfImportBusy=true;
+ try{
+  const stored=new Set((await getStoredClips()).map(c=>c.id));
+  let added=0,unresolved=0;
+  const addClip=async(item)=>{
+   if(stored.has(item.id))return;
+   const data=await hfGet(HF_ROOT+encodeURIComponent(item.file),true);
+   if(!(data instanceof ArrayBuffer)||data.byteLength<100||data.byteLength>8000000)throw Error('invalid WAV '+item.file);
+   await storeClip({id:item.id,label:item.label,tag:item.tag,intent:item.intent,source:'huggingface',blob:new Blob([data],{type:'audio/wav'})});
+   stored.add(item.id);added++;
+  };
+  for(const item of NEW_VOICE){try{await addClip(item)}catch(e){unresolved++;}}
+  // Verify the row's English transcript AND its audio path before importing.
+  try{
+   const api='https://datasets-server.huggingface.co/rows?dataset=starrydark%2FMakise_Kurisu_Voice&config=default&split=train&offset=200&length=100';
+   const result=JSON.parse(await hfGet(api));
+   for(const spec of POSITIONAL_VOICE){
+    const entry=(result.rows||[]).find(r=>r.row_idx===200+spec.position-1);
+    const data=entry?.row||{};
+    const textual=Object.entries(data).filter(([k])=>!/audio|path|file|source|id/i.test(k)).map(([,v])=>typeof v==='string'?v:'').join(' ');
+    const serialized=JSON.stringify(data);
+    const file=(serialized.match(/game_ja_[a-zA-Z0-9_]+\.wav/)||[])[0];
+    if(!entry||!spec.check.test(textual)||!file){unresolved++;continue;}
+    const item={...spec,id:'hf-position-'+spec.position,file};
+    try{await addClip(item)}catch(e){unresolved++;}
+   }
+  }catch(e){unresolved+=POSITIONAL_VOICE.length;}
+  await reloadVoice();
+  hfImportStatus=added+' imported; '+unresolved+' unresolved (position verification/network)';
+ }finally{hfImportBusy=false;}
+}
+
 // Private GitHub access is opt-in. Credentials stay in Tampermonkey's isolated storage,
 // never in ChatGPT localStorage, URLs, logs or the repository. Use a read-only fine-grained token.
 function githubRequest(path,token,binary=false){
@@ -177,6 +259,7 @@ async function synchronizePrivateVoice(interactive=false){
 }
 syncVoice.addEventListener('click',()=>synchronizePrivateVoice(true));
 if(typeof GM_getValue==='function'&&GM_getValue(PRIVATE_TOKEN_KEY,''))setTimeout(()=>synchronizePrivateVoice(false),2500);
+setTimeout(()=>importHfCandidates().catch(e=>{hfImportStatus='import error: '+e.message;}),4000);
 async function migrateLegacyVoice(){
  try{
   const old=JSON.parse(localStorage.getItem(VOICE_LIBRARY)||'{}');
@@ -219,6 +302,7 @@ async function playClip(clip,manual=false){
   if(clip.tag===voiceLastTag&&now-voiceLastAt<10000){voiceStatus='reaction cooldown';return;}
   if(playing&&!playing.paused&&!playing.ended){voiceStatus='already speaking';return;}
  }else stopVoice();
+ if(!manual)recordVoiceStat(clip,'attempted');
  const url=URL.createObjectURL(clip.blob);
  const audio=new Audio(url);audio.volume=0.7;playing=audio;
  voiceStatus='loading '+clip.label;
@@ -229,7 +313,7 @@ async function playClip(clip,manual=false){
   await audio.play();
   // Preserve conversational expression; voice and face are independent.
   voiceStatus='played '+clip.label+' ('+clip.tag+')';
-  if(!manual){const now=Date.now();voiceLastAt=now;voiceLastId=clip.id;voiceLastClipAt=now;voiceLastTag=clip.tag;voiceHistory.push(now);}
+  if(!manual){const now=Date.now();voiceLastAt=now;voiceLastId=clip.id;voiceLastClipAt=now;voiceLastTag=clip.tag;voiceHistory.push(now);recordVoiceStat(clip,'played');}
  }catch(e){voiceStatus='playback blocked: '+(e?.name||e?.message||'unknown');cleanup();}
 }
 // One shared decision for face and voice; never infer a voice from an unrelated quoted keyword.
@@ -294,23 +378,50 @@ function chooseVoiceReaction(response,userText){
  choices.sort((a,b)=>b.score-a.score);
  return choices[0]||null;
 }
+
+function voiceIntentFits(intent,response,userText){
+ const t=normalized(response).slice(0,1100),u=normalized(userText);
+ const mentioned=/\b(voice|audio|clip|recording|dataset|transcript|script|soundboard|phrase|line)\b/.test(u);
+ if(mentioned)return false;
+ const serious=/\b(assault|harassment|abuse|victim|trauma|emergency|medical|cancer|suicide|legal|finance|death)\b/.test(u);
+ if(serious)return false;
+ const joking=/\b(teas\w*|jok\w*|baka|haha|lol|messing with|kidding|prank|troll)\b/.test(u);
+ const exchange=/\b(you owe me|in return|favor|favour|payment|reward|trade|deal|what do i get)\b/.test(u);
+ switch(intent){
+  case 'growl':return joking&&/\b(grr+|growl|frustrat\w*|annoy\w*|fed up|hmph)\b/.test(t);
+  case 'stop_joking':return joking&&/\b(stop (?:joking|teasing|messing)|enough already|quit (?:joking|teasing)|not funny)\b/.test(t);
+  case 'wait_realization':return /\b(wait a minute|hold on|i just realized|on second thought|actually,? wait|there.s a catch)\b/.test(t);
+  case 'offer_help':return /\b(i (?:want to|can|will|would like to) help you|i.m here to help|let me help you)\b/.test(t)&&/\b(help|assist|support|struggl\w*|need|can you|could you)\b/.test(u);
+  case 'assistant_identity':return /\b(your assistant|as your assistant|i.m (?:still )?your assistant)\b/.test(t)&&/\b(assistant|your role|who are you|christina|amadeus)\b/.test(u);
+  case 'greeting':return /^\s*(?:hello|hi|hey|good morning|good evening)[!,. ]/i.test(t)&&/^(?:hello|hi|hey|good morning|good evening)\b/.test(u.trim());
+  case 'sexual_boundary':return /\b(sexual harassment|inappropriate|pervert|hentai|crossing a line)\b/.test(t)&&/\b(sexual|pervert|hentai|touch|grope|undress|sleep with|kiss me)\b/.test(u);
+  case 'reject_offer':return /\b(i don.t need (?:it|that)|no thanks|i don.t want that)\b/.test(t)&&/\b(want|need|take|offer|give|gift|help)\b/.test(u);
+  case 'refusal':return /\b(i refuse|not doing that|absolutely not|no,? i won.t)\b/.test(t)&&/\b(do it|you must|i dare you|i demand|make you|will you|can you)\b/.test(u);
+  case 'embarrassed_accept':return /\b(i won.t refuse|i suppose i can|fine,? i.ll|i guess i can)\b/.test(t)&&/\b(embarrass\w*|fluster\w*|blush\w*|reluctant\w*|looks away)\b/.test(t);
+  case 'suspicious_exchange':return exchange&&/\b(in return|something in return|what do you want|you expect|quid pro quo)\b/.test(t);
+  case 'deny_sulking':return /\b(i.m not sulking|not sulking|i.m not pouting)\b/.test(t)&&/\b(sulk\w*|pout\w*|upset|grumpy)\b/.test(u);
+  default:return false;
+ }
+}
+
 function automaticVoice(decision,response,userText){
  const reaction=chooseVoiceReaction(response,userText);
  voiceDecisionLog='classified: '+(reaction?reaction.tag:'none')+(reaction?.nuance?' ('+reaction.nuance+')':'')+(reaction?.reason?' | '+reaction.reason:'');
  if(!voiceEnabled){voiceStatus='muted';voiceDecisionLog+=' | blocked: muted';return;}
- if(!reaction){voiceStatus='natural silence: no suitable interjection';voiceDecisionLog+=' | no matching response cue';return;}
- const candidates=voiceClips.filter(c=>c.tag===reaction.tag);
+ if(!reaction&&!voiceClips.some(c=>c.intent&&voiceIntentFits(c.intent,response,userText))){voiceStatus='natural silence: no suitable interjection';voiceDecisionLog+=' | no matching response cue';return;}
+ const contextual=voiceClips.filter(c=>c.intent&&voiceIntentFits(c.intent,response,userText));
+ const candidates=contextual.length?contextual:voiceClips.filter(c=>!c.intent&&c.tag===reaction?.tag);
  if(!candidates.length){voiceStatus='no clip tagged '+reaction.tag;voiceDecisionLog+=' | missing tagged clip';return;}
  eligibleVoiceTurns++;
  if(Math.random()>0.70){voiceStatus='natural silence: sampled';voiceDecisionLog+=' | skipped: probability';return;}
  let pool=candidates;
- if(reaction.tag==='agreement'){
+ if(reaction?.tag==='agreement'&&!contextual.length){
   const id=reaction.nuance==='embarrassed'?'crs-0036-agreement':'crs-0058-agreement';
   const preferred=candidates.find(c=>c.id===id);
   if(preferred)pool=[preferred];
  }
  const clip=pool.find(c=>c.id!==voiceLastId)||pool[0];
- voiceDecisionLog+=' | selected: '+clip.label;
+ voiceDecisionLog+=' | selected: '+clip.label+(clip.intent?' | intent: '+clip.intent:'');
  playClip(clip,false);
 }
 persona.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(AMADEUS_PERSONALITY_PROFILE);voiceStatus='personality profile copied';alert('Profile copied. Paste it once into Amadeus Project instructions. The userscript cannot directly change the model personality.');}catch(e){voiceStatus='clipboard unavailable';alert('Clipboard access unavailable in this browser.');}});voice.addEventListener('click',()=>{
@@ -567,10 +678,18 @@ function detect(){
  // Assistant text is intentionally not used here: streaming it could repeatedly
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
-function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' | Stored clips: '+voiceClips.map(c=>c.label+' ['+c.tag+']').join(', ')+' | Audio: '+voiceStatus+' | Voice decision: '+voiceDecisionLog+' | Eligible turns: '+eligibleVoiceTurns+' | Current face: '+names[mood]+' | Manual override: '+Math.max(0,Math.ceil((manualUntil-Date.now())/1000))+'s | User messages: '+users.length;}
+function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' | Stored clips: '+voiceClips.map(c=>c.label+' ['+c.tag+']').join(', ')+' | Audio: '+voiceStatus+' | Voice decision: '+voiceDecisionLog+' | HF import: '+hfImportStatus+' | Voice stats: '+Object.values(voiceStats.plays).reduce((a,b)=>a+b,0)+' plays | Eligible turns: '+eligibleVoiceTurns+' | Current face: '+names[mood]+' | Manual override: '+Math.max(0,Math.ceil((manualUntil-Date.now())/1000))+'s | User messages: '+users.length;}
 debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
-// Network access is limited to opt-in private GitHub voice synchronization; no model calls.
+// Local stats persist across reloads; daily buckets are based on the device clock.
+const statsButton=document.createElement('button');
+statsButton.textContent='Export voice stats';
+statsButton.title='Download JSON of per-clip and per-day playback counts';
+statsButton.style.cssText='position:fixed;right:12px;bottom:12px;z-index:2147483646;font:11px system-ui;padding:5px 8px;opacity:.55;cursor:pointer';
+statsButton.addEventListener('click',exportVoiceStats);
+diagnostic.append(document.createElement('br'),statsButton);
+// Voice WAVs are fetched from the public dataset; private sync remains opt-in.
+
 function tick(){
  if(document.hidden)return;
  detect();
