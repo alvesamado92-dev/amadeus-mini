@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.11
+// @version      0.9.12
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -89,7 +89,8 @@ let voiceStats=GM_getValue(VOICE_STATS_KEY,{version:1,plays:{},daily:{},attempts
 if(!voiceStats.plays)voiceStats={version:1,plays:{},daily:{},attempts:{}};
 function recordVoiceStat(clip,kind){
  const day=new Date().toLocaleDateString('en-CA');
- const bucket=kind==='played'?'plays':'attempts';
+ const bucket=kind==='played'?'plays':kind==='attempted'?'attempts':kind;
+ if(!voiceStats[bucket])voiceStats[bucket]={};
  voiceStats[bucket][clip.id]=(voiceStats[bucket][clip.id]||0)+1;
  if(!voiceStats.daily[day])voiceStats.daily[day]={};
  const key=clip.id+':'+kind;
@@ -97,7 +98,7 @@ function recordVoiceStat(clip,kind){
  GM_setValue(VOICE_STATS_KEY,voiceStats);
 }
 function exportVoiceStats(){
- const payload={exportedAt:new Date().toISOString(),stats:voiceStats,clips:voiceClips.map(c=>({id:c.id,label:c.label,intent:c.intent||'',tag:c.tag,plays:voiceStats.plays[c.id]||0}))};
+ const payload={exportedAt:new Date().toISOString(),stats:voiceStats,clips:voiceClips.map(c=>({id:c.id,label:c.label,intent:c.intent||'',tag:c.tag,plays:voiceStats.plays[c.id]||0,eligible:voiceStats.eligible?.[c.id]||0,selected:voiceStats.selected?.[c.id]||0,muted:voiceStats.muted?.[c.id]||0}))};
  const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download='amadeus-voice-stats-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
@@ -443,12 +444,12 @@ function voiceIntentFits(intent,response,userText){
 function automaticVoice(decision,response,userText){
  const reaction=chooseVoiceReaction(response,userText);
  voiceDecisionLog='classified: '+(reaction?reaction.tag:'none')+(reaction?.nuance?' ('+reaction.nuance+')':'')+(reaction?.reason?' | '+reaction.reason:'');
- if(!voiceEnabled){voiceStatus='muted';voiceDecisionLog+=' | blocked: muted';return;}
  if(!reaction&&!voiceClips.some(c=>c.intent&&voiceIntentFits(c.intent,response,userText))){voiceStatus='natural silence: no suitable interjection';voiceDecisionLog+=' | no matching response cue';return;}
  const contextual=voiceClips.filter(c=>c.intent&&voiceIntentFits(c.intent,response,userText));
  const candidates=contextual.length?contextual:voiceClips.filter(c=>!c.intent&&c.tag===reaction?.tag);
  if(!candidates.length){voiceStatus='no clip tagged '+(reaction?.tag||'contextual');voiceDecisionLog+=' | missing tagged clip';return;}
  eligibleVoiceTurns++;
+ for(const candidate of candidates)recordVoiceStat(candidate,'eligible');
  if(Math.random()>0.70){voiceStatus='natural silence: sampled';voiceDecisionLog+=' | skipped: probability';return;}
  let pool=candidates;
  if(reaction?.tag==='agreement'&&!contextual.length){
@@ -458,6 +459,8 @@ function automaticVoice(decision,response,userText){
  }
  const clip=pool.find(c=>c.id!==voiceLastId)||pool[0];
  voiceDecisionLog+=' | selected: '+clip.label+(clip.intent?' | intent: '+clip.intent:'');
+ recordVoiceStat(clip,'selected');
+ if(!voiceEnabled){recordVoiceStat(clip,'muted');voiceStatus='muted';voiceDecisionLog+=' | blocked: muted';return;}
  playClip(clip,false);
 }
 persona.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(AMADEUS_PERSONALITY_PROFILE);voiceStatus='personality profile copied';alert('Profile copied. Paste it once into Amadeus Project instructions. The userscript cannot directly change the model personality.');}catch(e){voiceStatus='clipboard unavailable';alert('Clipboard access unavailable in this browser.');}});voice.addEventListener('click',()=>{
