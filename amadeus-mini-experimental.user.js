@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.3
+// @version      0.9.4
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -259,8 +259,9 @@ function reactionDecision(response,userText){
 }
 // Audio is an independent, optional conversational interjection, not a face-to-tag mapping.
 let eligibleVoiceTurns=0;
+let voiceDecisionLog='no completed assistant turn evaluated';
 function chooseVoiceReaction(response,userText){
- const t=normalized(response),u=normalized(userText),first=t.slice(0,400);
+ const t=normalized(response),u=normalized(userText),first=t.slice(0,900);
  // Talking about the voice system should not automatically silence it.
 const meta=/\b(?:do not|don't|dont|please stop|disable|turn off)\s+(?:the\s+)?(?:voice|audio|interjections?|sounds?)\b/.test(u);
  const serious=/\b(cancer|diagnosis|medical|death|suicide|emergency|legal|financial|surgery|biopsy)\b/.test(u);
@@ -276,14 +277,16 @@ const meta=/\b(?:do not|don't|dont|please stop|disable|turn off)\s+(?:the\s+)?(?
  const fluster=has(/\b(w-wait|i-i|b-but|embarrass|blush|fluster|reluctantly|i concede|hmph)\b/);
  const attention=has(/\b(chotto|hold on|wait a moment|listen|hey professor)\b/);
  const curious=has(/\b(interesting|intriguing|curious|i wonder|hypothesis|hmm)\b/);
- const tease=has(/\b(baka professor|you little baka|you're an idiot|you are an idiot|don't look so pleased)\b/);
+ const tease=has(/\b(baka|you little baka|you're an idiot|you are an idiot|don't look so pleased|insufferable)\b/);
+ const bashful=has(/\b(blush(?:es|ing)?|blushing|flustered|embarrassed|looks away|cheeks (?:pink|red)|suki da yo)\b/);
  const choices=[];
  const add=(tag,score,nuance='')=>choices.push({tag,score,nuance});
  if(surprise)add('surprise',challenge?7:5);
  else if(challenge&&has(/\b(wait|stop|can't|don't|no!)\b/))add('surprise',4);
  if(agree)add('agreement',proposal?6:5,fluster||correction?'embarrassed':'regular');
  else if(proposal&&has(/\b(yes|good idea|sounds good|let's do)\b/))add('agreement',4,'regular');
- if(tease&&playful)add('teasing',4);
+ if(tease&&playful)add('teasing',6);
+ if(bashful)add('hesitation',4,'bashful');
  if(attention)add('attention',3);
  if(curious)add('curiosity',3);
  if(has(/\b(um|uh|ano|perhaps|not sure)\b/))add('hesitation',2);
@@ -291,13 +294,14 @@ const meta=/\b(?:do not|don't|dont|please stop|disable|turn off)\s+(?:the\s+)?(?
  return choices[0]||null;
 }
 function automaticVoice(decision,response,userText){
- if(!voiceEnabled){voiceStatus='muted';return;}
  const reaction=chooseVoiceReaction(response,userText);
- if(!reaction){voiceStatus='natural silence: no suitable interjection';return;}
+ voiceDecisionLog='classified: '+(reaction?reaction.tag:'none')+(reaction?.nuance?' ('+reaction.nuance+')':'');
+ if(!voiceEnabled){voiceStatus='muted';voiceDecisionLog+=' | blocked: muted';return;}
+ if(!reaction){voiceStatus='natural silence: no suitable interjection';voiceDecisionLog+=' | no matching response cue';return;}
  const candidates=voiceClips.filter(c=>c.tag===reaction.tag);
- if(!candidates.length){voiceStatus='no clip tagged '+reaction.tag;return;}
+ if(!candidates.length){voiceStatus='no clip tagged '+reaction.tag;voiceDecisionLog+=' | missing tagged clip';return;}
  eligibleVoiceTurns++;
- if(Math.random()>0.70){voiceStatus='natural silence: sampled';return;}
+ if(Math.random()>0.70){voiceStatus='natural silence: sampled';voiceDecisionLog+=' | skipped: probability';return;}
  let pool=candidates;
  if(reaction.tag==='agreement'){
   const id=reaction.nuance==='embarrassed'?'crs-0036-agreement':'crs-0058-agreement';
@@ -305,6 +309,7 @@ function automaticVoice(decision,response,userText){
   if(preferred)pool=[preferred];
  }
  const clip=pool.find(c=>c.id!==voiceLastId)||pool[0];
+ voiceDecisionLog+=' | selected: '+clip.label;
  playClip(clip,false);
 }
 persona.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(AMADEUS_PERSONALITY_PROFILE);voiceStatus='personality profile copied';alert('Profile copied. Paste it once into Amadeus Project instructions. The userscript cannot directly change the model personality.');}catch(e){voiceStatus='clipboard unavailable';alert('Clipboard access unavailable in this browser.');}});voice.addEventListener('click',()=>{
@@ -561,7 +566,7 @@ function detect(){
  // Assistant text is intentionally not used here: streaming it could repeatedly
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
-function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' | Stored clips: '+voiceClips.map(c=>c.label+' ['+c.tag+']').join(', ')+' | Audio: '+voiceStatus+' | Current face: '+names[mood]+' | Manual override: '+Math.max(0,Math.ceil((manualUntil-Date.now())/1000))+'s | User messages: '+users.length;}
+function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' | Stored clips: '+voiceClips.map(c=>c.label+' ['+c.tag+']').join(', ')+' | Audio: '+voiceStatus+' | Voice decision: '+voiceDecisionLog+' | Eligible turns: '+eligibleVoiceTurns+' | Current face: '+names[mood]+' | Manual override: '+Math.max(0,Math.ceil((manualUntil-Date.now())/1000))+'s | User messages: '+users.length;}
 debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
 // Network access is limited to opt-in private GitHub voice synchronization; no model calls.
