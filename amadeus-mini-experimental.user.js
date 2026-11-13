@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.9
+// @version      0.9.10
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -71,15 +71,15 @@ const NEW_VOICE=[
  {id:'hf-00059',file:'game_ja_PHENO_kurisu_00059.wav',label:'Oh, wait a minute!',intent:'wait_realization',tag:'attention'}
 ];
 const POSITIONAL_VOICE=[
- {position:5,label:'I want to help you',intent:'offer_help',tag:'agreement',check:/i want to help you/i},
- {position:14,label:'Me, your assistant',intent:'assistant_identity',tag:'attention',check:/me,? your assistant/i},
- {position:18,label:'Hello',intent:'greeting',tag:'attention',check:/\bhello\b/i},
- {position:21,label:"That's just plain sexual harassment",intent:'sexual_boundary',tag:'strong_annoyance',check:/sexual harassment/i},
- {position:22,label:"I don't need it. Seriously...",intent:'reject_offer',tag:'teasing',check:/i don.t need it/i},
- {position:27,label:'But I refuse.',intent:'refusal',tag:'teasing',check:/but i refuse/i},
- {position:28,label:"Oh, no, I won't refuse.",intent:'embarrassed_accept',tag:'hesitation',check:/won.t refuse/i},
- {position:30,label:"You're not seriously planning on asking for something in return, are you?!",intent:'suspicious_exchange',tag:'surprise',check:/asking for something in return/i},
- {position:88,label:"I'm not sulking",intent:'deny_sulking',tag:'teasing',check:/not sulking/i}
+ {position:5,file:'game_ja_PHENO_kurisu_00272.wav',label:'I want to help you',intent:'offer_help',tag:'agreement'},
+ {position:14,file:'game_ja_PHENO_kurisu_00281.wav',label:'Me, your assistant',intent:'assistant_identity',tag:'attention'},
+ {position:18,file:'game_ja_PHENO_kurisu_00301.wav',label:'Hello',intent:'greeting',tag:'attention'},
+ {position:21,file:'game_ja_PHENO_kurisu_00304.wav',label:"That's just plain sexual harassment",intent:'sexual_boundary',tag:'strong_annoyance'},
+ {position:22,file:'game_ja_PHENO_kurisu_00305.wav',label:"I don't need it. Seriously...",intent:'reject_offer',tag:'teasing'},
+ {position:27,file:'game_ja_PHENO_kurisu_00310.wav',label:'But I refuse.',intent:'refusal',tag:'teasing'},
+ {position:28,file:'game_ja_PHENO_kurisu_00311.wav',label:"Oh, no, I won't refuse.",intent:'embarrassed_accept',tag:'hesitation'},
+ {position:30,file:'game_ja_PHENO_kurisu_00313.wav',label:"You're not seriously planning on asking for something in return, are you?!",intent:'suspicious_exchange',tag:'surprise'},
+ {position:88,file:'game_ja_PHENO_kurisu_00371.wav',label:"I'm not sulking",intent:'deny_sulking',tag:'teasing'}
 ];
 let voiceStats=GM_getValue(VOICE_STATS_KEY,{version:1,plays:{},daily:{},attempts:{}})||{version:1,plays:{},daily:{},attempts:{}};
 if(!voiceStats.plays)voiceStats={version:1,plays:{},daily:{},attempts:{}};
@@ -212,34 +212,12 @@ async function importHfCandidates(){
    stored.add(item.id);added++;
   };
   for(const item of NEW_VOICE){try{await addClip(item)}catch(e){unresolved++;hfImportErrors.push(item.id+': '+(e?.message||String(e)));}}
-  // Search translated text and use the structured audio URL instead of assuming a filename.
-  try{
-   const found=new Map();let inspected=0;let sample='';
-   for(let offset=0;offset<500&&found.size<POSITIONAL_VOICE.length;offset+=100){
-    const api='https://datasets-server.huggingface.co/rows?dataset=starrydark%2FMakise_Kurisu_Voice&config=default&split=train&offset='+offset+'&length=100';
-    let result;try{result=JSON.parse(await hfGet(api));}catch(e){hfImportErrors.push('API offset '+offset+': '+e.message);break;}
-    const rows=result.rows||[];if(!rows.length)break;
-    for(const entry of rows){
-     inspected++;const data=entry.row||{};
-     const transcript=Object.entries(data).filter(([k])=>!/audio|path|file|source|id/i.test(k)).map(([,v])=>typeof v==='string'?v:'').join(' ');
-     if(!sample)sample='keys '+Object.keys(data).join(',')+' example '+transcript.slice(0,90);
-     for(const spec of POSITIONAL_VOICE){
-      if(found.has(spec.position)||!spec.check.test(transcript))continue;
-      const audio=data.audio||Object.values(data).find(v=>v&&typeof v==='object'&&typeof v.src==='string');
-      const src=audio?.src||audio?.url;const path=audio?.path||data.path||data.file;
-      const file=(String(path||'').match(/game_ja_[a-zA-Z0-9_]+\.wav/)||[])[0];
-      const url=typeof src==='string'&&src.startsWith('https://')?src:null;
-      if(!file&&!url){hfImportErrors.push('phrase '+spec.position+' matched but no audio URL');continue;}
-      found.set(spec.position,{...spec,id:'hf-position-'+spec.position,file,url});
-     }
-    }
-   }
-   for(const spec of POSITIONAL_VOICE){
-    const item=found.get(spec.position);
-    if(!item){unresolved++;hfImportErrors.push('phrase '+spec.position+' not matched in '+inspected+' rows; '+sample);continue;}
-    try{await addClip(item)}catch(e){unresolved++;hfImportErrors.push('phrase '+spec.position+': '+e.message);}
-   }
-  }catch(e){unresolved+=POSITIONAL_VOICE.length;hfImportErrors.push('dataset: '+e.message);}
+  // Direct user-verified WAV filenames; retain stable positional IDs for stats.
+  for(const spec of POSITIONAL_VOICE){
+   const item={...spec,id:'hf-position-'+spec.position};
+   try{await addClip(item)}
+   catch(e){unresolved++;hfImportErrors.push(item.id+': '+(e?.message||String(e)));}
+  }
   await reloadVoice();
   hfImportStatus=added+' imported; '+unresolved+' unresolved'+(hfImportErrors.length?' | '+hfImportErrors.slice(0,3).join(' / '):'');
  }finally{hfImportBusy=false;}
