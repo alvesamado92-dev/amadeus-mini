@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.8
+// @version      0.9.9
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -154,8 +154,36 @@ function suggestedTag(label){
  if(/0020|ano|hesita/.test(t))return 'hesitation';
  return 'other';
 }
+const CLIP_DISPLAY_NAMES={
+ 'github-crs-0030-full':'Angry Scolding',
+ 'github-crs-0030-baka':'Playful Baka',
+ 'github-crs-0041-surprise':'Surprised Huh',
+ 'github-crs-0001-attention':'Hold On',
+ 'github-crs-0002-curiosity':'Curious Huh',
+ 'github-crs-0019-startle':'Startled Kya',
+ 'github-crs-0020-hesitation':'Hesitant Ano',
+ 'github-crs-0034-attention':'Getting Attention',
+ 'github-crs-0036-agreement':'Surprised Agreement',
+ 'github-crs-0058-agreement':'Calm Agreement',
+ 'hf-00227':'Frustrated Growl',
+ 'hf-00228':'Stop Joking',
+ 'hf-00059':'Wait a Minute',
+ 'hf-position-5':'Want to Help',
+ 'hf-position-14':'Your Assistant',
+ 'hf-position-18':'Hello',
+ 'hf-position-21':'Sexual Harassment Protest',
+ 'hf-position-22':'No Thanks',
+ 'hf-position-27':'Firm Refusal',
+ 'hf-position-28':'Reluctant Acceptance',
+ 'hf-position-30':'Suspicious Favor',
+ 'hf-position-88':'Not Sulking'
+};
+function displayVoiceClip(c){
+ const label=CLIP_DISPLAY_NAMES[c.id];
+ return label?{...c,originalLabel:c.originalLabel||c.label,label}:c;
+}
 async function reloadVoice(){
- try{voiceClips=await getStoredClips();voiceStatus='ready: '+voiceClips.length+' clip(s)';}
+ try{voiceClips=(await getStoredClips()).map(displayVoiceClip);voiceStatus='ready: '+voiceClips.length+' clip(s)';}
  catch(e){voiceStatus='storage error: '+(e?.name||e?.message||'unknown');}
 }
 
