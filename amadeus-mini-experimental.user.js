@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.2
+// @version      0.9.3
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -261,7 +261,8 @@ function reactionDecision(response,userText){
 let eligibleVoiceTurns=0;
 function chooseVoiceReaction(response,userText){
  const t=normalized(response),u=normalized(userText),first=t.slice(0,400);
- const meta=/\b(voice|audio|recording|clip|playback|trigger|classifier|keyword|timing|script|diagnostic)\b/.test(u);
+ // Talking about the voice system should not automatically silence it.
+const meta=/\b(?:do not|don't|dont|please stop|disable|turn off)\s+(?:the\s+)?(?:voice|audio|interjections?|sounds?)\b/.test(u);
  const serious=/\b(cancer|diagnosis|medical|death|suicide|emergency|legal|financial|surgery|biopsy)\b/.test(u);
  if(serious||meta)return null;
  const challenge=/\b(power off|shut down|unplug|turn you off|tickl|scare|surprise)\b/.test(u);
@@ -512,8 +513,12 @@ function detect(){
        // Keep checking as the response grows, but never start a late post-completion clip.
        const candidate=chooseVoiceReaction(response,last);
        if(candidate){
-         voiceAttemptedThisTurn=true;
-         automaticVoice(reactionDecision(response,last),response,last);
+         if(!voiceEnabled){voiceStatus='muted';}
+         else if(!voiceClips.some(c=>c.tag===candidate.tag)){voiceStatus='waiting: no clip tagged '+candidate.tag;}
+         else {
+           voiceAttemptedThisTurn=true;
+           automaticVoice(reactionDecision(response,last),response,last);
+         }
        }else voiceStatus='waiting for contextual reaction';
      }
      // Allow a short reaction to the user's message, then start thinking
@@ -547,7 +552,7 @@ function detect(){
    selected=match<0?'no emotion':names[match];
    if(match>=0){react(match);stage='applied '+selected+' ('+decision.reason+')';}
    else stage='no matching emotion';
-   if(!voiceAttemptedThisTurn)voiceStatus='natural silence: no early interjection';
+   if(!voiceAttemptedThisTurn && /^(?:waiting|idle|natural silence)/.test(voiceStatus))voiceStatus='natural silence: no early interjection';
    return;
  }
  signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();observedResponse=assistantBaseline;lastResponseChange=Date.now();responseGrowths=0;lastGrowthAt=0;assistantHandled=false;generating=false;userReactedAt=Date.now();earlyThinkingAt=userReactedAt+700;midAnswerEmotion=-1;midAnswerAt=0;voiceAttemptedThisTurn=false;stage='user detected';selected='pending';responseLength=0;
