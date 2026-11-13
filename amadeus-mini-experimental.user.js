@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.6
+// @version      0.9.7
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -13,6 +13,7 @@
 // @connect      *.huggingface.co
 // @connect      *.hf.co
 // @connect      *.xethub.hf.co
+// @connect      *
 // @connect      datasets-server.huggingface.co
 // @noframes
 // @updateURL    https://raw.githubusercontent.com/alvesamado92-dev/amadeus-mini/main/amadeus-mini-experimental.user.js
@@ -168,9 +169,10 @@ function hfGet(url,binary=false){
  }));
 }
 let hfImportBusy=false,hfImportStatus='not checked';
+let hfImportErrors=[];
 async function importHfCandidates(){
  if(hfImportBusy)return;
- hfImportBusy=true;
+ hfImportBusy=true;hfImportErrors=[];
  try{
   const stored=new Set((await getStoredClips()).map(c=>c.id));
   let added=0,unresolved=0;
@@ -181,7 +183,7 @@ async function importHfCandidates(){
    await storeClip({id:item.id,label:item.label,tag:item.tag,intent:item.intent,source:'huggingface',blob:new Blob([data],{type:'audio/wav'})});
    stored.add(item.id);added++;
   };
-  for(const item of NEW_VOICE){try{await addClip(item)}catch(e){unresolved++;}}
+  for(const item of NEW_VOICE){try{await addClip(item)}catch(e){unresolved++;hfImportErrors.push(item.id+': '+(e?.message||String(e)));}}
   // Verify the row's English transcript AND its audio path before importing.
   try{
    const api='https://datasets-server.huggingface.co/rows?dataset=starrydark%2FMakise_Kurisu_Voice&config=default&split=train&offset=200&length=100';
@@ -192,13 +194,13 @@ async function importHfCandidates(){
     const textual=Object.entries(data).filter(([k])=>!/audio|path|file|source|id/i.test(k)).map(([,v])=>typeof v==='string'?v:'').join(' ');
     const serialized=JSON.stringify(data);
     const file=(serialized.match(/game_ja_[a-zA-Z0-9_]+\.wav/)||[])[0];
-    if(!entry||!spec.check.test(textual)||!file){unresolved++;continue;}
+    if(!entry||!spec.check.test(textual)||!file){unresolved++;hfImportErrors.push('position '+spec.position+': '+(!entry?'row absent':!spec.check.test(textual)?'transcript mismatch: '+textual.slice(0,90):'no WAV path in dataset row'));continue;}
     const item={...spec,id:'hf-position-'+spec.position,file};
-    try{await addClip(item)}catch(e){unresolved++;}
+    try{await addClip(item)}catch(e){unresolved++;hfImportErrors.push('position '+spec.position+': '+(e?.message||String(e)));}
    }
-  }catch(e){unresolved+=POSITIONAL_VOICE.length;}
+  }catch(e){unresolved+=POSITIONAL_VOICE.length;hfImportErrors.push('dataset rows API: '+(e?.message||String(e)));}
   await reloadVoice();
-  hfImportStatus=added+' imported; '+unresolved+' unresolved (position verification/network)';
+  hfImportStatus=added+' imported; '+unresolved+' unresolved'+(hfImportErrors.length?' | '+hfImportErrors.slice(0,3).join(' / '):'');
  }finally{hfImportBusy=false;}
 }
 
@@ -682,7 +684,7 @@ function detect(){
  // retrigger expressions, wasting CPU and preventing a natural neutral return.
 }
 function refreshDiagnostics(){const msgs=readMessages(),users=msgs.filter(m=>m.role==='user');diagnostic.textContent='Stage: '+stage+' | Assistant source: '+source+' | Response chars: '+responseLength+' | Stable polls: '+assistantStable+' | Selected: '+selected+' | Generating: '+(generating||isGenerating())+' | Growth events: '+responseGrowths+' | Voice: '+(voiceEnabled?'on':'muted')+' | Stored clips: '+voiceClips.map(c=>c.label+' ['+c.tag+']').join(', ')+' | Audio: '+voiceStatus+' | Voice decision: '+voiceDecisionLog+' | HF import: '+hfImportStatus+' | Voice stats: '+Object.values(voiceStats.plays).reduce((a,b)=>a+b,0)+' plays | Eligible turns: '+eligibleVoiceTurns+' | Current face: '+names[mood]+' | Manual override: '+Math.max(0,Math.ceil((manualUntil-Date.now())/1000))+'s | User messages: '+users.length;}
-debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';statsButton.style.display=diagnostic.style.display==='block'?'block':'none';if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
+debug.addEventListener('click',()=>{refreshDiagnostics();diagnostic.style.display=diagnostic.style.display==='none'?'block':'none';statsButton.style.display=diagnostic.style.display==='block'?'block':'none';hfRetryButton.style.display=statsButton.style.display;if(diagnostic.style.display==='block' && controlsTimer){clearTimeout(controlsTimer);controlsTimer=null;}});
 
 // Local stats persist across reloads; daily buckets are based on the device clock.
 const statsButton=document.createElement('button');
@@ -692,6 +694,17 @@ statsButton.style.cssText='position:fixed;right:12px;bottom:12px;z-index:2147483
 statsButton.addEventListener('click',exportVoiceStats);
 document.body.append(statsButton);
 statsButton.style.display='none';
+const hfRetryButton=document.createElement('button');
+hfRetryButton.textContent='Retry HF import';
+hfRetryButton.title='Retry and show detailed Hugging Face import errors';
+hfRetryButton.style.cssText='position:fixed;right:12px;bottom:45px;z-index:2147483646;font:11px system-ui;padding:5px 8px;cursor:pointer';
+hfRetryButton.style.display='none';document.body.append(hfRetryButton);
+hfRetryButton.addEventListener('click',async()=>{
+ await importHfCandidates();
+ alert('Hugging Face import: '+hfImportStatus+'\\n\\n'+(hfImportErrors.join('\\n')||'No errors'));
+ refreshDiagnostics();
+});
+
 // Voice WAVs are fetched from the public dataset; private sync remains opt-in.
 
 function tick(){
