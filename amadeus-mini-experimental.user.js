@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.4
+// @version      0.9.5
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -260,42 +260,43 @@ function reactionDecision(response,userText){
 // Audio is an independent, optional conversational interjection, not a face-to-tag mapping.
 let eligibleVoiceTurns=0;
 let voiceDecisionLog='no completed assistant turn evaluated';
+// Conservative semantic gate: a voice line must be a plausible utterance in context,
+// not merely share an emotional label with the assistant response.
 function chooseVoiceReaction(response,userText){
  const t=normalized(response),u=normalized(userText),first=t.slice(0,900);
- // Talking about the voice system should not automatically silence it.
-const meta=/\b(?:do not|don't|dont|please stop|disable|turn off)\s+(?:the\s+)?(?:voice|audio|interjections?|sounds?)\b/.test(u);
- const serious=/\b(cancer|diagnosis|medical|death|suicide|emergency|legal|financial|surgery|biopsy)\b/.test(u);
+ const cue=first.replace(/\b(for example|the word|the phrase|the recording|the clip|the classifier)\b/g,'');
+ const serious=/\b(cancer|diagnosis|medical|death|suicide|emergency|legal|financial|surgery|biopsy|assault|abuse|harassment)\b/.test(u);
+ const meta=/\b(?:do not|don't|dont|please stop|disable|turn off)\s+(?:the\s+)?(?:voice|audio|interjections?|sounds?)\b/.test(u);
  if(serious||meta)return null;
- const challenge=/\b(power off|shut down|unplug|turn you off|tickl|scare|surprise)\b/.test(u);
- const proposal=/\b(should we|we should|i think|maybe we|how about|let's|lets)\b/.test(u);
- const correction=/\b(wrong|incorrect|mistake|actually|you forgot|you missed)\b/.test(u);
- const playful=/\b(baka|idiot|christina|professor|teas|jok|lol|haha)\b/.test(u);
- const has=(re)=>re.test(first);
- if(has(/\b(the word|the phrase|for example|the recording|the clip|the classifier)\b/))return null;
- const surprise=has(/(?:^|[\s"'“])(?:e-?eh+|huh|what|kya)[!?]+|\b(wait,? what|no way|you actually)\b/);
- const agree=has(/\b(i agree|agreed|exactly|you're right|you are right|fair point|good point|makes sense|understood|absolutely|that's right)\b/);
- const fluster=has(/\b(w-wait|i-i|b-but|embarrass|blush|fluster|reluctantly|i concede|hmph)\b/);
- const attention=has(/\b(chotto|hold on|wait a moment|listen|hey professor)\b/);
- const curious=has(/\b(interesting|intriguing|curious|i wonder|hypothesis|hmm)\b/);
- const tease=has(/\b(baka|you little baka|you're an idiot|you are an idiot|don't look so pleased|insufferable)\b/);
- const bashful=has(/\b(blush(?:es|ing)?|blushing|flustered|embarrassed|looks away|cheeks (?:pink|red)|suki da yo)\b/);
+ const isDiscussion=/\b(clip|audio|recording|voice line|classifier|transcript|dataset|soundboard|trigger|script|keyword|tag|test the voice)\b/.test(u);
+ // Quoting or discussing dialogue is not an invitation to act it out.
+ if(isDiscussion||/\b(the word|the phrase|for example|the recording|the clip|the classifier)\b/.test(first))return null;
+ const playful=/\b(baka|christina|professor|teas\w*|jok\w*|lol|haha|hehe)\b/.test(u);
+ const challenge=/\b(power off|shut down|unplug|scare|surprise|you forgot|caught you|gotcha)\b/.test(u);
+ const explicitSurprise=/^(?:[\\s*"'“”]*)(?:huh[!?]+|what[!?]+|e-?eh[!?]+|wait[,.!? ]+what[!?]+)/.test(first);
+ const directAgreement=/\b(i agree|agreed|exactly|you're right|you are right|fair point|good point|that's right)\b/.test(cue);
+ const userProposal=/\b(should we|we should|i think|maybe we|how about|let's|lets|would you|can you)\b/.test(u);
+ const reluctantAgreement=/\b(reluctantly|i concede|fine[,.!]|all right[,.!]|i suppose you're right|you win)\b/.test(cue);
+ const teasingRebuke=/\b(baka|you little|don't get too|you impossible|insufferable)\b/.test(cue);
+ const directAddress=/\b(hey professor|listen, professor|hold on|wait a moment|one moment)\b/.test(cue);
+ const inquiry=/\b(i wonder|that's curious|interesting question|intriguing|hmm[,.!?])\b/.test(cue);
+ const uncertain=/\b(i'm not sure|i am not sure|perhaps|maybe|um[,.]|uh[,.])\b/.test(cue);
+ const embarrassed=/\b(blush\w*|fluster\w*|embarrass\w*|looks away|cheeks (?:pink|red))\b/.test(cue);
  const choices=[];
- const add=(tag,score,nuance='')=>choices.push({tag,score,nuance});
- if(surprise)add('surprise',challenge?7:5);
- else if(challenge&&has(/\b(wait|stop|can't|don't|no!)\b/))add('surprise',4);
- if(agree)add('agreement',proposal?6:5,fluster||correction?'embarrassed':'regular');
- else if(proposal&&has(/\b(yes|good idea|sounds good|let's do)\b/))add('agreement',4,'regular');
- if(tease&&playful)add('teasing',6);
- if(bashful)add('hesitation',4,'bashful');
- if(attention)add('attention',3);
- if(curious)add('curiosity',3);
- if(has(/\b(um|uh|ano|perhaps|not sure)\b/))add('hesitation',2);
+ const add=(tag,score,nuance,reason)=>choices.push({tag,score,nuance,reason});
+ if(explicitSurprise&&(challenge||/\b(surpris\w*|unexpected|really|what|huh)\b/.test(u)))add('surprise',8,'','direct surprise in reply to an unexpected user statement');
+ if(directAgreement&&(userProposal||/\b(correct|right|agree|yes|true|mistake|wrong)\b/.test(u)))add('agreement',7,reluctantAgreement?'embarrassed':'regular','explicit agreement with user');
+ if(teasingRebuke&&playful)add('teasing',6,'','playful personal rebuke');
+ if(embarrassed&&reluctantAgreement&&playful)add('hesitation',5,'bashful','embarrassed concession');
+ if(directAddress&&/\b(professor|christina|amadeus|hey|listen|wait)\b/.test(u))add('attention',5,'','explicit attention-getting address');
+ if(inquiry&&/\b(why|how|what|hypothesis|research|interesting|curious|question)\b/.test(u))add('curiosity',5,'','genuine shared inquiry');
+ if(uncertain&&/\b(are you sure|perhaps|maybe|uncertain|not sure|could|would)\b/.test(u))add('hesitation',4,'uncertain','uncertainty expressed in a tentative exchange');
  choices.sort((a,b)=>b.score-a.score);
  return choices[0]||null;
 }
 function automaticVoice(decision,response,userText){
  const reaction=chooseVoiceReaction(response,userText);
- voiceDecisionLog='classified: '+(reaction?reaction.tag:'none')+(reaction?.nuance?' ('+reaction.nuance+')':'');
+ voiceDecisionLog='classified: '+(reaction?reaction.tag:'none')+(reaction?.nuance?' ('+reaction.nuance+')':'')+(reaction?.reason?' | '+reaction.reason:'');
  if(!voiceEnabled){voiceStatus='muted';voiceDecisionLog+=' | blocked: muted';return;}
  if(!reaction){voiceStatus='natural silence: no suitable interjection';voiceDecisionLog+=' | no matching response cue';return;}
  const candidates=voiceClips.filter(c=>c.tag===reaction.tag);
