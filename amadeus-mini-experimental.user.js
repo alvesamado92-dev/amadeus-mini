@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.12
+// @version      0.9.13
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -433,10 +433,10 @@ function voiceIntentFits(intent,response,userText){
   case 'embarrassed_accept':return /\b(i won.t refuse|i suppose i can|fine,? i.ll|i guess i can)\b/.test(t)&&/\b(embarrass\w*|fluster\w*|blush\w*|reluctant\w*|looks away)\b/.test(t);
   case 'suspicious_exchange':return exchange&&/\b(in return|something in return|what do you want|you expect|quid pro quo)\b/.test(t);
   case 'deny_sulking':return /\b(i.m not sulking|not sulking|i.m not pouting)\b/.test(t)&&/\b(sulk\w*|pout\w*|upset|grumpy)\b/.test(u);
-  case 'peeking_protest':return /\\b(peek\\w*|peeping|pervert)\\b/.test(u)&&/\\b(peek\\w*|peeping|pervert|stop looking|don.t look)\\b/.test(t)&&joking;
-  case 'deny_anger':return /\\b(angry|mad at|upset with|annoyed with)\\b/.test(u)&&/\\b(i.m not angry|not angry|just thinking|i.m thinking)\\b/.test(t);
-  case 'false_alarm_relief':return /\\b(false alarm|nothing to worry|all (?:good|fine|okay)|turned out fine|no problem after all|worr\\w* for nothing)\\b/.test(t)&&/\\b(worr\\w*|scared|panic|problem|issue|false alarm|fixed|resolved|fine now)\\b/.test(u);
-  case 'embarrassed_protest':return joking&&/\\b(stop (?:teasing|making fun)|don.t (?:tease|make fun)|shut up|you.re embarrassing me)\\b/.test(t)&&/\\b(teas\\w*|jok\\w*|embarrass\\w*|blush|fluster\\w*|making fun)\\b/.test(u);
+  case 'peeking_protest':return /\b(peek\w*|peeping|pervert)\b/.test(u)&&/\b(peek\w*|peeping|pervert|stop looking|don.t look)\b/.test(t)&&joking;
+  case 'deny_anger':return /\b(angry|mad at|upset with|annoyed with)\b/.test(u)&&/\b(i.m not angry|not angry|just thinking|i.m thinking)\b/.test(t);
+  case 'false_alarm_relief':return /\b(false alarm|nothing to worry|all (?:good|fine|okay)|turned out fine|no problem after all|worr\w* for nothing)\b/.test(t)&&/\b(worr\w*|scared|panic|problem|issue|false alarm|fixed|resolved|fine now)\b/.test(u);
+  case 'embarrassed_protest':return joking&&/\b(stop (?:teasing|making fun)|don.t (?:tease|make fun)|shut up|you.re embarrassing me)\b/.test(t)&&/\b(teas\w*|jok\w*|embarrass\w*|blush|fluster\w*|making fun)\b/.test(u);
   default:return false;
  }
 }
