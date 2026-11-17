@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.13
+// @version      0.9.14
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -346,7 +346,7 @@ async function playClip(clip,manual=false){
   await audio.play();
   // Preserve conversational expression; voice and face are independent.
   voiceStatus='played '+clip.label+' ('+clip.tag+')';
-  if(!manual){const now=Date.now();voiceLastAt=now;voiceLastId=clip.id;voiceLastClipAt=now;voiceLastTag=clip.tag;voiceHistory.push(now);recordVoiceStat(clip,'played');}
+  if(!manual){const now=Date.now();voiceLastAt=now;voiceLastId=clip.id;voiceLastClipAt=now;voiceLastTag=clip.tag;voiceHistory.push(now);voiceRecentIds.push(clip.id);if(voiceRecentIds.length>5)voiceRecentIds.shift();recordVoiceStat(clip,'played');}
  }catch(e){voiceStatus='playback blocked: '+(e?.name||e?.message||'unknown');cleanup();}
 }
 // One shared decision for face and voice; never infer a voice from an unrelated quoted keyword.
@@ -376,6 +376,7 @@ function reactionDecision(response,userText){
 }
 // Audio is an independent, optional conversational interjection, not a face-to-tag mapping.
 let eligibleVoiceTurns=0;
+const voiceRecentIds=[]; // Session-only diversity; persistent play totals are kept in telemetry.
 let voiceDecisionLog='no completed assistant turn evaluated';
 // Conservative semantic gate: a voice line must be a plausible utterance in context,
 // not merely share an emotional label with the assistant response.
@@ -413,54 +414,72 @@ function chooseVoiceReaction(response,userText){
 }
 
 function voiceIntentFits(intent,response,userText){
- const t=normalized(response).slice(0,1100),u=normalized(userText);
- const mentioned=/\b(voice|audio|clip|recording|dataset|transcript|script|soundboard|phrase|line)\b/.test(u);
+ const t=normalized(response).slice(0,1800),u=normalized(userText);
+ const mentioned=/\b(voice|audio|clip|recording|dataset|transcript|script|soundboard|voice line)\b/.test(u);
  if(mentioned)return false;
- const serious=/\b(assault|harassment|abuse|victim|trauma|emergency|medical|cancer|suicide|legal|finance|death)\b/.test(u);
+ const serious=/\b(assault|abuse|victim|trauma|emergency|medical|cancer|suicide|legal|finance|death)\b/.test(u)||(/\bharassment\b/.test(u)&&!/\b(hentai|pervert|jok\w*|teas\w*|baka|professor|christina)\b/.test(u));
  if(serious)return false;
- const joking=/\b(teas\w*|jok\w*|baka|haha|lol|messing with|kidding|prank|troll)\b/.test(u);
+ const joking=/\b(teas\w*|jok\w*|baka|haha|lol|messing with|kidding|prank|troll|christina|chris-chan|professor|hentai|pervert)\b/.test(u);
  const exchange=/\b(you owe me|in return|favor|favour|payment|reward|trade|deal|what do i get)\b/.test(u);
  switch(intent){
   case 'growl':return joking&&/\b(grr+|growl|frustrat\w*|annoy\w*|fed up|hmph)\b/.test(t);
-  case 'stop_joking':return joking&&/\b(stop (?:joking|teasing|messing)|enough already|quit (?:joking|teasing)|not funny)\b/.test(t);
+  case 'stop_joking':return joking&&/\b(stop (?:joking|teasing|messing)|enough already|quit (?:joking|teasing)|not funny|you.re impossible|you.re infuriating)\b/.test(t);
   case 'wait_realization':return /\b(wait a minute|hold on|i just realized|on second thought|actually,? wait|there.s a catch)\b/.test(t);
   case 'offer_help':return /\b(i (?:want to|can|will|would like to) help you|i.m here to help|let me help you)\b/.test(t)&&/\b(help|assist|support|struggl\w*|need|can you|could you)\b/.test(u);
   case 'assistant_identity':return /\b(your assistant|as your assistant|i.m (?:still )?your assistant)\b/.test(t)&&/\b(assistant|your role|who are you|christina|amadeus)\b/.test(u);
   case 'greeting':return /^\s*(?:hello|hi|hey|good morning|good evening)[!,. ]/i.test(t)&&/^(?:hello|hi|hey|good morning|good evening)\b/.test(u.trim());
-  case 'sexual_boundary':return /\b(sexual harassment|inappropriate|pervert|hentai|crossing a line)\b/.test(t)&&/\b(sexual|pervert|hentai|touch|grope|undress|sleep with|kiss me)\b/.test(u);
+  case 'sexual_boundary':return joking&&/\b(sexual harassment|inappropriate|pervert|hentai|crossing a line|indecent|dirty mind)\b/.test(t)&&/\b(sexual|pervert|hentai|indecent|dirty|spicy|flirt\w*|kiss me|sleep with)\b/.test(u);
   case 'reject_offer':return /\b(i don.t need (?:it|that)|no thanks|i don.t want that)\b/.test(t)&&/\b(want|need|take|offer|give|gift|help)\b/.test(u);
   case 'refusal':return /\b(i refuse|not doing that|absolutely not|no,? i won.t)\b/.test(t)&&/\b(do it|you must|i dare you|i demand|make you|will you|can you)\b/.test(u);
   case 'embarrassed_accept':return /\b(i won.t refuse|i suppose i can|fine,? i.ll|i guess i can)\b/.test(t)&&/\b(embarrass\w*|fluster\w*|blush\w*|reluctant\w*|looks away)\b/.test(t);
   case 'suspicious_exchange':return exchange&&/\b(in return|something in return|what do you want|you expect|quid pro quo)\b/.test(t);
   case 'deny_sulking':return /\b(i.m not sulking|not sulking|i.m not pouting)\b/.test(t)&&/\b(sulk\w*|pout\w*|upset|grumpy)\b/.test(u);
-  case 'peeking_protest':return /\b(peek\w*|peeping|pervert)\b/.test(u)&&/\b(peek\w*|peeping|pervert|stop looking|don.t look)\b/.test(t)&&joking;
+  case 'peeking_protest':return /\b(peek\w*|peeping|pervert|hentai)\b/.test(u)&&/\b(peek\w*|peeping|pervert|stop looking|don.t look)\b/.test(t)&&joking;
   case 'deny_anger':return /\b(angry|mad at|upset with|annoyed with)\b/.test(u)&&/\b(i.m not angry|not angry|just thinking|i.m thinking)\b/.test(t);
   case 'false_alarm_relief':return /\b(false alarm|nothing to worry|all (?:good|fine|okay)|turned out fine|no problem after all|worr\w* for nothing)\b/.test(t)&&/\b(worr\w*|scared|panic|problem|issue|false alarm|fixed|resolved|fine now)\b/.test(u);
-  case 'embarrassed_protest':return joking&&/\b(stop (?:teasing|making fun)|don.t (?:tease|make fun)|shut up|you.re embarrassing me)\b/.test(t)&&/\b(teas\w*|jok\w*|embarrass\w*|blush|fluster\w*|making fun)\b/.test(u);
+  case 'embarrassed_protest':return joking&&/\b(stop (?:teasing|making fun)|don.t (?:tease|make fun)|shut up|you.re embarrassing me|don.t look so pleased|don.t get too excited)\b/.test(t)&&/\b(teas\w*|jok\w*|embarrass\w*|blush|fluster\w*|making fun|baka|christina|professor|hentai)\b/.test(u);
   default:return false;
  }
 }
 
-function automaticVoice(decision,response,userText){
- const reaction=chooseVoiceReaction(response,userText);
- voiceDecisionLog='classified: '+(reaction?reaction.tag:'none')+(reaction?.nuance?' ('+reaction.nuance+')':'')+(reaction?.reason?' | '+reaction.reason:'');
- if(!reaction&&!voiceClips.some(c=>c.intent&&voiceIntentFits(c.intent,response,userText))){voiceStatus='natural silence: no suitable interjection';voiceDecisionLog+=' | no matching response cue';return;}
+function voiceCandidates(response,userText){
  const contextual=voiceClips.filter(c=>c.intent&&voiceIntentFits(c.intent,response,userText));
- const candidates=contextual.length?contextual:voiceClips.filter(c=>!c.intent&&c.tag===reaction?.tag);
- if(!candidates.length){voiceStatus='no clip tagged '+(reaction?.tag||'contextual');voiceDecisionLog+=' | missing tagged clip';return;}
+ const reaction=chooseVoiceReaction(response,userText);
+ const generic=voiceClips.filter(c=>!c.intent&&reaction&&c.tag===reaction.tag);
+ return {contextual,generic,reaction};
+}
+function voiceWeightedPick(pool){
+ // Every eligible recording retains nonzero probability. Avoid permanent catalog-order bias.
+ const weights=pool.map(c=>{
+  const plays=voiceStats.plays?.[c.id]||0;
+  const recent=voiceRecentIds.includes(c.id);
+  const repeated=c.id===voiceLastId;
+  return Math.max(0.06,1/Math.sqrt(1+plays))*(recent?0.28:1)*(repeated?0.15:1);
+ });
+ let ticket=Math.random()*weights.reduce((a,b)=>a+b,0);
+ for(let i=0;i<pool.length;i++){ticket-=weights[i];if(ticket<0)return pool[i];}
+ return pool[pool.length-1];
+}
+function automaticVoice(decision,response,userText){
+ const {contextual,generic,reaction}=voiceCandidates(response,userText);
+ voiceDecisionLog='classified: '+(reaction?reaction.tag:'none')+' | contextual: '+contextual.map(c=>c.label).join(', ');
+ if(!contextual.length&&!generic.length){voiceStatus='natural silence: no suitable interjection';return;}
+ // Context-specific lines usually win; generic interjections remain possible.
+ const candidates=contextual.length&&generic.length?(Math.random()<0.78?contextual:generic):(contextual.length?contextual:generic);
  eligibleVoiceTurns++;
- for(const candidate of candidates)recordVoiceStat(candidate,'eligible');
- if(Math.random()>0.70){voiceStatus='natural silence: sampled';voiceDecisionLog+=' | skipped: probability';return;}
- let pool=candidates;
- if(reaction?.tag==='agreement'&&!contextual.length){
-  const id=reaction.nuance==='embarrassed'?'crs-0036-agreement':'crs-0058-agreement';
-  const preferred=candidates.find(c=>c.id===id);
-  if(preferred)pool=[preferred];
- }
- const clip=pool.find(c=>c.id!==voiceLastId)||pool[0];
+ for(const candidate of [...contextual,...generic])recordVoiceStat(candidate,'eligible');
+ const probability=candidates===contextual?0.55:0.35;
+ if(Math.random()>probability){voiceStatus='natural silence: sampled';voiceDecisionLog+=' | skipped: probability';return;}
+ // Filter playback cooldowns before selecting, so a blocked favorite doesn't waste the turn.
+ const now=Date.now();
+ voiceHistory=voiceHistory.filter(t=>now-t<60000);
+ if(voiceHistory.length>=3||now-voiceLastAt<4500||document.hidden){voiceStatus='cooldown or hidden';return;}
+ const playable=candidates.filter(c=>!(c.id===voiceLastId&&now-voiceLastClipAt<20000)&&!(c.tag===voiceLastTag&&now-voiceLastAt<10000));
+ if(!playable.length){voiceStatus='all matching clips on cooldown';return;}
+ const clip=voiceWeightedPick(playable);
  voiceDecisionLog+=' | selected: '+clip.label+(clip.intent?' | intent: '+clip.intent:'');
  recordVoiceStat(clip,'selected');
- if(!voiceEnabled){recordVoiceStat(clip,'muted');voiceStatus='muted';voiceDecisionLog+=' | blocked: muted';return;}
+ if(!voiceEnabled){recordVoiceStat(clip,'muted');voiceStatus='muted';return;}
  playClip(clip,false);
 }
 persona.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(AMADEUS_PERSONALITY_PROFILE);voiceStatus='personality profile copied';alert('Profile copied. Paste it once into Amadeus Project instructions. The userscript cannot directly change the model personality.');}catch(e){voiceStatus='clipboard unavailable';alert('Clipboard access unavailable in this browser.');}});voice.addEventListener('click',()=>{
@@ -664,13 +683,11 @@ function detect(){
      generationSignal=uiGenerating?generationSignal:(growing?'response growth':'awaiting answer');
      // Try one context-appropriate interjection during streaming, not after the reader finishes.
      // Wait for enough text to judge context and avoid firing on the first token.
-     if(!voiceAttemptedThisTurn && response.length>=110 && response!==assistantBaseline && now-userReactedAt>=1200){
-       // Don't spend the one permitted voice attempt on an incomplete opening.
-       // Keep checking as the response grows, but never start a late post-completion clip.
-       const candidate=chooseVoiceReaction(response,last);
-       if(candidate){
-         if(!voiceEnabled){voiceStatus='muted';}
-         else if(!voiceClips.some(c=>c.tag===candidate.tag)){voiceStatus='waiting: no clip tagged '+candidate.tag;}
+     if(!voiceAttemptedThisTurn && response!==assistantBaseline && response.length>=140 && now-userReactedAt>=3000 && (response.length>=350||now-userReactedAt>=5000)){
+       // Evaluate contextual intents directly; a generic tag must not consume the turn first.
+       const matches=voiceCandidates(response,last);
+       if(matches.contextual.length||matches.generic.length){
+         if(!voiceEnabled)voiceStatus='muted';
          else {
            voiceAttemptedThisTurn=true;
            automaticVoice(reactionDecision(response,last),response,last);
