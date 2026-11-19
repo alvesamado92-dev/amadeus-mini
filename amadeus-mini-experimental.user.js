@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.14
+// @version      0.9.15
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -378,6 +378,15 @@ function reactionDecision(response,userText){
 let eligibleVoiceTurns=0;
 const voiceRecentIds=[]; // Session-only diversity; persistent play totals are kept in telemetry.
 let voiceDecisionLog='no completed assistant turn evaluated';
+// Suppress enactment when either side is discussing the audio system itself.
+// These rules are intentionally conservative: false negatives are safer than public outbursts.
+function voiceMetaDiscussion(userText,assistantText){
+ const u=normalized(userText),t=normalized(assistantText);
+ const audio=/\b(voice|audio|clip|recording|soundboard|voice line|playback|interjection|wav|mp3)\b/;
+ const engineering=/\b(trigger|keyword|classifier|detector|script|code|bug|false positive|eligible|played|muted|sync|diagnos|selection|matching|contextual|version|update)\b/;
+ const meta=/\b(clip|audio|recording|voice line|classifier|transcript|dataset|soundboard|trigger|script|keyword|tag|test the voice|amadeus mini)\b/;
+ return meta.test(u)||(audio.test(t)&&engineering.test(t))||(audio.test(u)&&engineering.test(u));
+}
 // Conservative semantic gate: a voice line must be a plausible utterance in context,
 // not merely share an emotional label with the assistant response.
 function chooseVoiceReaction(response,userText){
@@ -386,7 +395,7 @@ function chooseVoiceReaction(response,userText){
  const serious=/\b(cancer|diagnosis|medical|death|suicide|emergency|legal|financial|surgery|biopsy|assault|abuse|harassment)\b/.test(u);
  const meta=/\b(?:do not|don't|dont|please stop|disable|turn off)\s+(?:the\s+)?(?:voice|audio|interjections?|sounds?)\b/.test(u);
  if(serious||meta)return null;
- const isDiscussion=/\b(clip|audio|recording|voice line|classifier|transcript|dataset|soundboard|trigger|script|keyword|tag|test the voice)\b/.test(u);
+ const isDiscussion=voiceMetaDiscussion(u,first);
  // Quoting or discussing dialogue is not an invitation to act it out.
  if(isDiscussion||/\b(the word|the phrase|for example|the recording|the clip|the classifier)\b/.test(first))return null;
  const playful=/\b(baka|christina|professor|teas\w*|jok\w*|lol|haha|hehe)\b/.test(u);
@@ -415,11 +424,11 @@ function chooseVoiceReaction(response,userText){
 
 function voiceIntentFits(intent,response,userText){
  const t=normalized(response).slice(0,1800),u=normalized(userText);
- const mentioned=/\b(voice|audio|clip|recording|dataset|transcript|script|soundboard|voice line)\b/.test(u);
+ const mentioned=voiceMetaDiscussion(u,t);
  if(mentioned)return false;
  const serious=/\b(assault|abuse|victim|trauma|emergency|medical|cancer|suicide|legal|finance|death)\b/.test(u)||(/\bharassment\b/.test(u)&&!/\b(hentai|pervert|jok\w*|teas\w*|baka|professor|christina)\b/.test(u));
  if(serious)return false;
- const joking=/\b(teas\w*|jok\w*|baka|haha|lol|messing with|kidding|prank|troll|christina|chris-chan|professor|hentai|pervert)\b/.test(u);
+ const joking=/\b(teas\w*|jok\w*|baka|haha|lol|messing with|kidding|prank|troll)\b/.test(u);
  const exchange=/\b(you owe me|in return|favor|favour|payment|reward|trade|deal|what do i get)\b/.test(u);
  switch(intent){
   case 'growl':return joking&&/\b(grr+|growl|frustrat\w*|annoy\w*|fed up|hmph)\b/.test(t);
@@ -428,7 +437,7 @@ function voiceIntentFits(intent,response,userText){
   case 'offer_help':return /\b(i (?:want to|can|will|would like to) help you|i.m here to help|let me help you)\b/.test(t)&&/\b(help|assist|support|struggl\w*|need|can you|could you)\b/.test(u);
   case 'assistant_identity':return /\b(your assistant|as your assistant|i.m (?:still )?your assistant)\b/.test(t)&&/\b(assistant|your role|who are you|christina|amadeus)\b/.test(u);
   case 'greeting':return /^\s*(?:hello|hi|hey|good morning|good evening)[!,. ]/i.test(t)&&/^(?:hello|hi|hey|good morning|good evening)\b/.test(u.trim());
-  case 'sexual_boundary':return joking&&/\b(sexual harassment|inappropriate|pervert|hentai|crossing a line|indecent|dirty mind)\b/.test(t)&&/\b(sexual|pervert|hentai|indecent|dirty|spicy|flirt\w*|kiss me|sleep with)\b/.test(u);
+  case 'sexual_boundary':return joking&&/\b(sexual|pervert|hentai|indecent|dirty|spicy|flirt\w*|kiss me|sleep with)\b/.test(u)&&/\b(?:you(?:'re| are)?|professor,? you|that(?:'s| is))\s+(?:such a\s+)?(?:pervert|hentai|being inappropriate|crossing a line)\b|\b(?:stop|quit)\s+(?:being\s+)?(?:such a\s+)?(?:pervert|hentai|inappropriate)\b|\b(?:that's|that is)\s+(?:plain\s+)?sexual harassment\b/.test(t)&&! /\b(?:clip|recording|voice|audio|detector|trigger|classifier|keyword|example|quoted|script)\b/.test(t);
   case 'reject_offer':return /\b(i don.t need (?:it|that)|no thanks|i don.t want that)\b/.test(t)&&/\b(want|need|take|offer|give|gift|help)\b/.test(u);
   case 'refusal':return /\b(i refuse|not doing that|absolutely not|no,? i won.t)\b/.test(t)&&/\b(do it|you must|i dare you|i demand|make you|will you|can you)\b/.test(u);
   case 'embarrassed_accept':return /\b(i won.t refuse|i suppose i can|fine,? i.ll|i guess i can)\b/.test(t)&&/\b(embarrass\w*|fluster\w*|blush\w*|reluctant\w*|looks away)\b/.test(t);
@@ -681,19 +690,7 @@ function detect(){
    if(uiGenerating||growing||awaitingFirstText){
      if(!generating){generating=true;thinkingStarted=now;}
      generationSignal=uiGenerating?generationSignal:(growing?'response growth':'awaiting answer');
-     // Try one context-appropriate interjection during streaming, not after the reader finishes.
-     // Wait for enough text to judge context and avoid firing on the first token.
-     if(!voiceAttemptedThisTurn && response!==assistantBaseline && response.length>=140 && now-userReactedAt>=3000 && (response.length>=350||now-userReactedAt>=5000)){
-       // Evaluate contextual intents directly; a generic tag must not consume the turn first.
-       const matches=voiceCandidates(response,last);
-       if(matches.contextual.length||matches.generic.length){
-         if(!voiceEnabled)voiceStatus='muted';
-         else {
-           voiceAttemptedThisTurn=true;
-           automaticVoice(reactionDecision(response,last),response,last);
-         }
-       }else voiceStatus='waiting for contextual reaction';
-     }
+     // Do not play audio from partial replies: later text may negate or quote the apparent reaction.
      // Allow a short reaction to the user's message, then start thinking
      // immediately, even before the first visible assistant token.
      if(now>=earlyThinkingAt){
@@ -725,7 +722,7 @@ function detect(){
    selected=match<0?'no emotion':names[match];
    if(match>=0){react(match);stage='applied '+selected+' ('+decision.reason+')';}
    else stage='no matching emotion';
-   if(!voiceAttemptedThisTurn && /^(?:waiting|idle|natural silence)/.test(voiceStatus))voiceStatus='natural silence: no early interjection';
+   if(!voiceAttemptedThisTurn){voiceAttemptedThisTurn=true;automaticVoice(decision,response,last);}
    return;
  }
  signature=next;assistantSignature='';assistantStable=0;assistantBaseline=latestAssistantText();observedResponse=assistantBaseline;lastResponseChange=Date.now();responseGrowths=0;lastGrowthAt=0;assistantHandled=false;generating=false;userReactedAt=Date.now();earlyThinkingAt=userReactedAt+700;midAnswerEmotion=-1;midAnswerAt=0;voiceAttemptedThisTurn=false;stage='user detected';selected='pending';responseLength=0;
