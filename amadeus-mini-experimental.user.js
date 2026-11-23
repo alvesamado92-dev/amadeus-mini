@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.15
+// @version      0.9.16
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -442,7 +442,7 @@ function voiceIntentFits(intent,response,userText){
   case 'offer_help':return /\b(i (?:want to|can|will|would like to) help you|i.m here to help|let me help you)\b/.test(t)&&/\b(help|assist|support|struggl\w*|need|can you|could you)\b/.test(u);
   case 'assistant_identity':return /\b(your assistant|as your assistant|i.m (?:still )?your assistant)\b/.test(t)&&/\b(assistant|your role|who are you|christina|amadeus)\b/.test(u);
   case 'greeting':return /^\s*(?:hello|hi|hey|good morning|good evening)[!,. ]/i.test(t)&&/^(?:hello|hi|hey|good morning|good evening)\b/.test(u.trim());
-  case 'sexual_boundary':return joking&&/\b(sexual harassment|inappropriate|pervert|hentai|crossing a line|indecent|dirty mind)\b/.test(t)&&/\b(sexual|pervert|hentai|indecent|dirty|spicy|flirt\w*|kiss me|sleep with)\b/.test(u);
+  case 'sexual_boundary':return false; // Determined only by guarded paired-turn context in contextualActs().
   case 'reject_offer':return /\b(i don.t need (?:it|that)|no thanks|i don.t want that)\b/.test(t)&&/\b(want|need|take|offer|give|gift|help)\b/.test(u);
   case 'refusal':return /\b(i refuse|not doing that|absolutely not|no,? i won.t)\b/.test(t)&&/\b(do it|you must|i dare you|i demand|make you|will you|can you)\b/.test(u);
   case 'embarrassed_accept':return /\b(i won.t refuse|i suppose i can|fine,? i.ll|i guess i can)\b/.test(t)&&/\b(embarrass\w*|fluster\w*|blush\w*|reluctant\w*|looks away)\b/.test(t);
@@ -462,8 +462,8 @@ function contextualActs(response,userText){
  const clean=x=>normalized(x).replace(/\x60\x60\x60[\s\S]*?\x60\x60\x60/g,' ').replace(/^\s*>.*$/gm,' ').replace(/"[^"\n]*"/g,' ');
  const t=clean(response).slice(0,1400),u=clean(userText).slice(0,1600);
  const opening=t.slice(0,420), acts=new Set(),tags=new Set();
- const meta=/\b(?:voice|audio|clip|recording|classifier|dataset|userscript|soundboard|trigger|keyword)\b/.test(u);
- const serious=/\b(?:cancer|diagnosis|biopsy|suicide|assault|abuse|emergency|trauma|death|surgery)\b/.test(u);
+ const meta=/\b(?:voice|audio|clip|recording|classifier|dataset|userscript|soundboard|trigger|keyword|stats|telemetry)\b/.test(u) || /\b(?:voice clip|audio recording|intent matcher|user script|script version)\b/.test(t);
+ const serious=/\b(?:cancer|diagnosis|biopsy|suicide|assault|abuse|emergency|trauma|death|surgery|financial|legal)\b/.test(u);
  if(meta||serious)return {acts,tags,blocked:meta?'meta':'sensitive'};
  const reply=(re)=>re.test(opening), ask=(re)=>re.test(u);
  const personal=ask(/\b(?:you|your|christina|kurisu|amadeus|tu|voce|teu|sua)\b/);
@@ -491,6 +491,12 @@ function contextualActs(response,userText){
  if(concession&&!protest)tags.add('agreement');
  if(bashful||reply(/^(?:\s|[*!])*(?:um|uh|ano|well)[,.]/))tags.add('hesitation');
  if(playful&&ask(/\b(?:peek\w*|peep\w*|spying|espiando)\b/)&&reply(/\b(?:stop looking|don.t look|peeking|peeping|nao olhe)\b/))acts.add('peeking_protest');
+ // Guarded boundary reaction: deliberate personal innuendo PLUS an actual
+ // first-person rebuke. Mentioning sexual content in discussion is insufficient.
+ const intimate=personal&&ask(/\b(?:sexual|pervert|hentai|indecent|dirty|spicy|flirt\w*|kiss|undress|touch you|sleep with|assedi\w*|tarad\w*)\b/);
+ const boundary=reply(/\b(?:stop that|stop it|that.s inappropriate|you.re being inappropriate|that.s sexual harassment|don.t say that to me|you.re crossing a line|isso e assedio|isso nao e apropriado|se comporte)\b/);
+ const hypothetical=reply(/\b(?:if|example|hypothetical|definition|discussion|explaining|means that|would count as|is not|isn.t|not necessarily)\b/);
+ if(intimate&&boundary&&!hypothetical){acts.add('sexual_boundary');tags.add('strong_annoyance');}
  return {acts,tags,blocked:null};
 }
 function voiceCandidates(response,userText){
@@ -748,18 +754,9 @@ function detect(){
    if(uiGenerating||growing||awaitingFirstText){
      if(!generating){generating=true;thinkingStarted=now;}
      generationSignal=uiGenerating?generationSignal:(growing?'response growth':'awaiting answer');
-     // Try one context-appropriate interjection during streaming, not after the reader finishes.
-     // Wait for enough text to judge context and avoid firing on the first token.
-     if(!voiceAttemptedThisTurn && response!==assistantBaseline && response.length>=140 && now-userReactedAt>=3000 && (response.length>=350||now-userReactedAt>=5000)){
-       // Evaluate contextual intents directly; a generic tag must not consume the turn first.
-       const matches=voiceCandidates(response,last);
-       if(matches.contextual.length||matches.generic.length){
-         {
-           voiceAttemptedThisTurn=true;
-           automaticVoice(reactionDecision(response,last),response,last);
-         }
-       }else voiceStatus='waiting for contextual reaction';
-     }
+     // v0.9.16: keep facial expressions responsive while generating, but postpone
+     // audio until the completed answer. Partial text lacks enough context for
+     // boundary/protest interpretation; this restores the original v0.9.15 safeguard.
      // Allow a short reaction to the user's message, then start thinking
      // immediately, even before the first visible assistant token.
      if(now>=earlyThinkingAt){
