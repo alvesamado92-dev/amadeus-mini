@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amadeus Mini Experimental
 // @namespace    https://github.com/alvesamado92-dev/amadeus-mini
-// @version      0.9.14
+// @version      0.9.15
 // @description  Private GitHub voice sync (opt-in), IndexedDB and bulk import
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
@@ -87,6 +87,20 @@ const POSITIONAL_VOICE=[
 ];
 let voiceStats=GM_getValue(VOICE_STATS_KEY,{version:1,plays:{},daily:{},attempts:{}})||{version:1,plays:{},daily:{},attempts:{}};
 if(!voiceStats.plays)voiceStats={version:1,plays:{},daily:{},attempts:{}};
+voiceStats.version=2;
+voiceStats.turns=voiceStats.turns||{};
+voiceStats.categories=voiceStats.categories||{};
+voiceStats.intents=voiceStats.intents||{};
+voiceStats.outcomes=voiceStats.outcomes||{};
+voiceStats.telemetrySince=voiceStats.telemetrySince||new Date().toISOString();
+function voiceMetric(bucket,key){
+ const day=new Date().toLocaleDateString('en-CA');
+ const obj=voiceStats[bucket]||(voiceStats[bucket]={});
+ obj[key]=(obj[key]||0)+1;
+ const daily=voiceStats.daily[day]||(voiceStats.daily[day]={});
+ const k='turn:'+bucket+':'+key;daily[k]=(daily[k]||0)+1;
+ GM_setValue(VOICE_STATS_KEY,voiceStats);
+}
 function recordVoiceStat(clip,kind){
  const day=new Date().toLocaleDateString('en-CA');
  const bucket=kind==='played'?'plays':kind==='attempted'?'attempts':kind;
@@ -98,7 +112,7 @@ function recordVoiceStat(clip,kind){
  GM_setValue(VOICE_STATS_KEY,voiceStats);
 }
 function exportVoiceStats(){
- const payload={exportedAt:new Date().toISOString(),stats:voiceStats,clips:voiceClips.map(c=>({id:c.id,label:c.label,intent:c.intent||'',tag:c.tag,plays:voiceStats.plays[c.id]||0,eligible:voiceStats.eligible?.[c.id]||0,selected:voiceStats.selected?.[c.id]||0,muted:voiceStats.muted?.[c.id]||0}))};
+ const payload={exportedAt:new Date().toISOString(),stats:voiceStats,clips:voiceClips.map(c=>({id:c.id,label:c.label,intent:c.intent||'',tag:c.tag,plays:voiceStats.plays[c.id]||0,eligible:voiceStats.eligible?.[c.id]||0,selected:voiceStats.selected?.[c.id]||0,muted:voiceStats.muted?.[c.id]||0,completedEligible:voiceStats.completed_eligible?.[c.id]||0,attempts:voiceStats.attempts?.[c.id]||0,probabilitySkips:voiceStats.probability_skip?.[c.id]||0,cooldownSkips:voiceStats.cooldown_skip?.[c.id]||0,competing:voiceStats.competing?.[c.id]||0}))};
  const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download='amadeus-voice-stats-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
@@ -442,11 +456,61 @@ function voiceIntentFits(intent,response,userText){
  }
 }
 
+// Infer conversational acts from paired turns, not isolated trigger words.
+// Local heuristic only: no remote model, no transcript persistence.
+function contextualActs(response,userText){
+ const clean=x=>normalized(x).replace(/\x60\x60\x60[\s\S]*?\x60\x60\x60/g,' ').replace(/^\s*>.*$/gm,' ').replace(/"[^"\n]*"/g,' ');
+ const t=clean(response).slice(0,1400),u=clean(userText).slice(0,1600);
+ const opening=t.slice(0,420), acts=new Set(),tags=new Set();
+ const meta=/\b(?:voice|audio|clip|recording|classifier|dataset|userscript|soundboard|trigger|keyword)\b/.test(u);
+ const serious=/\b(?:cancer|diagnosis|biopsy|suicide|assault|abuse|emergency|trauma|death|surgery)\b/.test(u);
+ if(meta||serious)return {acts,tags,blocked:meta?'meta':'sensitive'};
+ const reply=(re)=>re.test(opening), ask=(re)=>re.test(u);
+ const personal=ask(/\b(?:you|your|christina|kurisu|amadeus|tu|voce|teu|sua)\b/);
+ const playful=personal&&(ask(/\b(?:haha|lol|jok\w*|teas\w*|again|score|grade|failed|terrible|excuse|baka|piada|nota|errou)\b/)||reply(/\b(?:grins?|smirks?|crosses her arms|mock|playfully|offended|pouts?|sighs?|sorri|brinca)\b/));
+ const protest=reply(/\b(?:that.s unfair|how dare you|give me a break|enough|you.re impossible|you.re enjoying this|don.t get too|not funny|seriously\?|isso e injusto|fala serio)\b/);
+ const concession=reply(/\b(?:fine|fair enough|fair point|i concede|you win|i admit|i.ll give you that|touche|admito|justo|esta bem)\b/);
+ const bashful=reply(/\b(?:blush\w*|fluster\w*|embarrass\w*|looks away|averts her gaze|corad\w*|desvia o olhar)\b/);
+ const request=ask(/\?|\b(?:please|could you|can you|would you|do it|tell me|give me|help me|pode|consegue|me ajude)\b/);
+ if(playful&&protest){acts.add('stop_joking');tags.add('teasing');}
+ if(playful&&bashful&&protest)acts.add('embarrassed_protest');
+ if(playful&&concession&&bashful)acts.add('embarrassed_accept');
+ if(playful&&reply(/\b(?:grr+|growls?|grits her teeth|clenches her|hmph|frustrated)\b/)) {acts.add('growl');tags.add('strong_annoyance');}
+ if(personal&&ask(/\b(?:angry|mad|annoyed|upset|brava|irritada)\b/)&&reply(/\b(?:not angry|not mad|just thinking|considering|nao estou brava|so pensando)\b/))acts.add('deny_anger');
+ if(personal&&ask(/\b(?:sulk\w*|pout\w*|upset|grumpy|emburrad\w*)\b/)&&reply(/\b(?:not sulking|not pouting|not upset|perfectly fine|nao estou emburrada)\b/))acts.add('deny_sulking');
+ if(request&&reply(/\b(?:i refuse|i won.t|not doing that|absolutely not|me recuso|nao vou fazer)\b/)&&playful)acts.add('refusal');
+ if(ask(/\b(?:want|offer|give you|gift|would you like|quer|presente)\b/)&&reply(/\b(?:no thanks|don.t need|keep it|not necessary|nao preciso|dispenso)\b/))acts.add('reject_offer');
+ if(ask(/\b(?:deal|favor|favour|reward|in return|owe|trade|troca|favorzinho)\b/)&&reply(/\b(?:catch|in return|what do you want|strings attached|suspicious|qual e a pegadinha)\b/))acts.add('suspicious_exchange');
+ if(ask(/\b(?:worried|scared|problem|fixed|resolved|panic|preocupad\w*|resolvido)\b/)&&reply(/\b(?:relief|what a relief|false alarm|nothing to worry|turned out fine|que alivio|falso alarme)\b/))acts.add('false_alarm_relief');
+ if(request&&reply(/\b(?:let me help|i can help|i.ll help|we can work|vamos resolver|posso ajudar)\b/))acts.add('offer_help');
+ if(/^(?:\s|[*!])*(?:hello|hi|hey|good morning|good evening|ola|oi|bom dia|boa noite)\b/.test(u)&&reply(/^(?:\s|[*!])*(?:hello|hi|hey|good morning|good evening|ola|oi|bom dia|boa noite)\b/))acts.add('greeting');
+ if(personal&&ask(/\b(?:assistant|assistente|your role|who are you|quem e voce)\b/)&&reply(/\b(?:your assistant|as your assistant|sua assistente)\b/))acts.add('assistant_identity');
+ if(reply(/^(?:\s|[*!])*(?:wait|hold on|hang on|one moment|pera|espera)\b/)||reply(/\b(?:i just realized|on second thought|there.s a catch|acabei de perceber)\b/)){acts.add('wait_realization');tags.add('attention');}
+ if(reply(/^(?:\s|[*!])*(?:huh|what|eh|really|seriously|como assim|serio)[?!]+/)||reply(/\b(?:raises an eyebrow|eyes widen|takes her by surprise|didn.t expect|nao esperava)\b/))tags.add('surprise');
+ if(reply(/\b(?:i wonder|that.s curious|intriguing|interesting question|makes me wonder|curious about|fico curiosa|interessante)\b/)&&(request||ask(/\b(?:why|how|because|hypothesis|porque|hipotese)\b/)))tags.add('curiosity');
+ if(concession&&!protest)tags.add('agreement');
+ if(bashful||reply(/^(?:\s|[*!])*(?:um|uh|ano|well)[,.]/))tags.add('hesitation');
+ if(playful&&ask(/\b(?:peek\w*|peep\w*|spying|espiando)\b/)&&reply(/\b(?:stop looking|don.t look|peeking|peeping|nao olhe)\b/))acts.add('peeking_protest');
+ return {acts,tags,blocked:null};
+}
 function voiceCandidates(response,userText){
- const contextual=voiceClips.filter(c=>c.intent&&voiceIntentFits(c.intent,response,userText));
+ const context=contextualActs(response,userText);
+ if(context.blocked)return {contextual:[],generic:[],reaction:null,blocked:context.blocked};
  const reaction=chooseVoiceReaction(response,userText);
- const generic=voiceClips.filter(c=>!c.intent&&reaction&&c.tag===reaction.tag);
- return {contextual,generic,reaction};
+ if(reaction)context.tags.add(reaction.tag);
+ const contextual=voiceClips.filter(c=>c.intent&&(context.acts.has(c.intent)||voiceIntentFits(c.intent,response,userText)));
+ const generic=voiceClips.filter(c=>!c.intent&&context.tags.has(c.tag));
+ return {contextual,generic,reaction,blocked:null};
+}
+function auditVoiceTurn(response,userText){
+ const {contextual,generic,blocked}=voiceCandidates(response,userText);
+ const pool=[...contextual,...generic];
+ voiceMetric('turns','evaluated');
+ voiceMetric('turns',pool.length?'eligible':'no_match');
+ if(blocked)voiceMetric('outcomes','blocked_'+blocked);
+ for(const tag of new Set(pool.map(c=>c.tag)))voiceMetric('categories',tag);
+ for(const intent of new Set(contextual.map(c=>c.intent)))voiceMetric('intents',intent);
+ for(const c of pool)recordVoiceStat(c,'completed_eligible');
 }
 function voiceWeightedPick(pool){
  // Every eligible recording retains nonzero probability. Avoid permanent catalog-order bias.
@@ -463,23 +527,26 @@ function voiceWeightedPick(pool){
 function automaticVoice(decision,response,userText){
  const {contextual,generic,reaction}=voiceCandidates(response,userText);
  voiceDecisionLog='classified: '+(reaction?reaction.tag:'none')+' | contextual: '+contextual.map(c=>c.label).join(', ');
- if(!contextual.length&&!generic.length){voiceStatus='natural silence: no suitable interjection';return;}
+ if(!contextual.length&&!generic.length){voiceMetric('outcomes','no_match');voiceStatus='natural silence: no suitable interjection';return;}
  // Context-specific lines usually win; generic interjections remain possible.
  const candidates=contextual.length&&generic.length?(Math.random()<0.78?contextual:generic):(contextual.length?contextual:generic);
  eligibleVoiceTurns++;
  for(const candidate of [...contextual,...generic])recordVoiceStat(candidate,'eligible');
+ for(const c of [...contextual,...generic])if(!candidates.includes(c))recordVoiceStat(c,'competing');
  const probability=candidates===contextual?0.55:0.35;
- if(Math.random()>probability){voiceStatus='natural silence: sampled';voiceDecisionLog+=' | skipped: probability';return;}
+ if(Math.random()>probability){voiceMetric('outcomes','probability');for(const c of candidates)recordVoiceStat(c,'probability_skip');voiceStatus='natural silence: sampled';voiceDecisionLog+=' | skipped: probability';return;}
  // Filter playback cooldowns before selecting, so a blocked favorite doesn't waste the turn.
  const now=Date.now();
  voiceHistory=voiceHistory.filter(t=>now-t<60000);
- if(voiceHistory.length>=3||now-voiceLastAt<4500||document.hidden){voiceStatus='cooldown or hidden';return;}
+ if(voiceHistory.length>=3||now-voiceLastAt<4500||document.hidden){voiceMetric('outcomes',document.hidden?'hidden':'cooldown');for(const c of candidates)recordVoiceStat(c,'cooldown_skip');voiceStatus='cooldown or hidden';return;}
  const playable=candidates.filter(c=>!(c.id===voiceLastId&&now-voiceLastClipAt<20000)&&!(c.tag===voiceLastTag&&now-voiceLastAt<10000));
- if(!playable.length){voiceStatus='all matching clips on cooldown';return;}
+ for(const c of candidates)if(!playable.includes(c))recordVoiceStat(c,'cooldown_skip');
+ if(!playable.length){voiceMetric('outcomes','clip_cooldown');voiceStatus='all matching clips on cooldown';return;}
  const clip=voiceWeightedPick(playable);
  voiceDecisionLog+=' | selected: '+clip.label+(clip.intent?' | intent: '+clip.intent:'');
- recordVoiceStat(clip,'selected');
- if(!voiceEnabled){recordVoiceStat(clip,'muted');voiceStatus='muted';return;}
+ for(const c of playable)if(c!==clip)recordVoiceStat(c,'competing');
+ voiceMetric('outcomes','selected');recordVoiceStat(clip,'selected');
+ if(!voiceEnabled){voiceMetric('outcomes','muted');recordVoiceStat(clip,'muted');voiceStatus='muted';return;}
  playClip(clip,false);
 }
 persona.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(AMADEUS_PERSONALITY_PROFILE);voiceStatus='personality profile copied';alert('Profile copied. Paste it once into Amadeus Project instructions. The userscript cannot directly change the model personality.');}catch(e){voiceStatus='clipboard unavailable';alert('Clipboard access unavailable in this browser.');}});voice.addEventListener('click',()=>{
@@ -687,8 +754,7 @@ function detect(){
        // Evaluate contextual intents directly; a generic tag must not consume the turn first.
        const matches=voiceCandidates(response,last);
        if(matches.contextual.length||matches.generic.length){
-         if(!voiceEnabled)voiceStatus='muted';
-         else {
+         {
            voiceAttemptedThisTurn=true;
            automaticVoice(reactionDecision(response,last),response,last);
          }
@@ -715,11 +781,13 @@ function detect(){
    const key=location.pathname+'|'+response;
    if(!response){stage='no assistant text';return;}
    if(response===assistantBaseline){stage='same as baseline';return;}
-   if(response.length<20){stage='response too short';return;}
+   if(!response.trim()){stage='response too short';return;}
    if(Date.now()-userReactedAt<3500){stage='waiting 3.5s';return;}
    if(key!==assistantSignature){assistantSignature=key;assistantStable=0;stage='response changing';return;}
    if(++assistantStable!==2){stage='stabilizing';return;}
    assistantHandled=true;stage='classified';
+   auditVoiceTurn(response,last);
+   if(!voiceAttemptedThisTurn){voiceAttemptedThisTurn=true;automaticVoice(reactionDecision(response,last),response,last);}
    const decision=reactionDecision(response,last);
    const match=decision.face;
    selected=match<0?'no emotion':names[match];
